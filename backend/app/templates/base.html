@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Socialize{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/design-system.css">
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <nav class="topnav">
+    <a class="brand" href="/board"><img src="/static/img/logo.png" alt="" class="brand-logo"> Socialize</a>
+    <a class="navlink {{ 'active' if active_nav == 'board' }}" href="/board">Board</a>
+    <a class="navlink {{ 'active' if active_nav == 'brand-kit' }}" href="/brand-kit">Brand Kit</a>
+    {% if user %}
+      <a class="navlink {{ 'active' if active_nav == 'account' }}" href="/account">Account</a>
+    {% endif %}
+    {% if user and user.is_admin %}
+      <a class="navlink {{ 'active' if active_nav == 'admin' }}" href="/admin/users">Admin</a>
+    {% endif %}
+    <span class="spacer"></span>
+    {% if accessible_brands %}
+      <button type="button" class="brand-switcher-btn" onclick="document.getElementById('brand-switcher-modal').showModal()">
+        {{ (active_brand.brand_name or active_brand.name) if active_brand else "Switch brand" }} ▾
+      </button>
+      <dialog id="brand-switcher-modal" class="settings-modal">
+        <button type="button" class="modal-close" onclick="document.getElementById('brand-switcher-modal').close()">✕</button>
+        <h2>Brands</h2>
+        {% for b in accessible_brands %}
+          <form method="post" action="/brands/switch" class="brand-switcher-row">
+            <input type="hidden" name="brand_kit_id" value="{{ b.id }}">
+            <button type="submit" class="btn btn-sm {{ 'btn-primary' if active_brand and b.id == active_brand.id else 'btn-ghost' }}">
+              {{ b.brand_name or b.name }}
+            </button>
+          </form>
+        {% endfor %}
+        <a href="/brands/new" class="btn btn-sm btn-ghost brand-switcher-row">+ New brand</a>
+      </dialog>
+    {% endif %}
+    <form class="inline" method="post" action="/logout">
+      <button type="submit" class="btn btn-ghost btn-sm">Log out</button>
+    </form>
+  </nav>
+  <main class="app-shell">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

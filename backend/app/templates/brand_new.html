@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}New brand - Socialize{% endblock %}
+{% block content %}
+  <h1>{{ "Create a brand" if accessible_brands else "Set up your first brand" }}</h1>
+  <p class="muted">
+    {% if accessible_brands %}
+      Each brand has its own niche, identity, logo, and settings — switch between them from the nav once you have more than one.
+    {% else %}
+      You don't have access to any brand yet. Create your own, or ask a brand owner to share theirs with you.
+    {% endif %}
+  </p>
+  {% if error %}<div class="badge badge-danger" style="margin-bottom:1rem">{{ error }}</div>{% endif %}
+
+  <div class="panel">
+    <form method="post" action="/brands">
+      <label>Brand name</label>
+      <input type="text" name="name" required placeholder="Your Brand" autofocus>
+      <button type="submit" class="btn btn-primary" style="margin-top:1rem">Create brand</button>
+    </form>
+  </div>
+
+  {% if accessible_brands %}
+    <h3>Your brands</h3>
+    {% for b in accessible_brands %}
+      <div class="card">{{ b.brand_name or b.name }}</div>
+    {% endfor %}
+  {% endif %}
+{% endblock %}

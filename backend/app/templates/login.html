@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in - Socialize</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/design-system.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .login-card { width: 100%; max-width: 340px; padding: 0 1.25rem; }
+    .login-brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1.5rem; }
+    .login-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    .error-banner { background: var(--danger-tint); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .85rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="login-card panel">
+    <div class="login-brand"><span class="dot"></span> Socialize</div>
+    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <label>Email</label>
+      <input type="email" name="email" required autofocus>
+      <label>Password</label>
+      <input type="password" name="password" required>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:1.1rem">Log in</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -1,0 +1,635 @@
+{% extends "base.html" %}
+{% block title %}Board - Socialize{% endblock %}
+{% block body_class %}board-page{% endblock %}
+{% block content %}
+  <style>
+    /* Break out of base.html's centered app-shell - only on this page. */
+    body.board-page .app-shell { max-width: none; padding: 0 1.25rem 1rem; }
+
+    .update-banner { display: flex; align-items: center; gap: .6rem; background: var(--primary-tint); color: var(--primary); border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: .5rem .7rem; margin-bottom: .6rem; font-size: .85rem; font-weight: 600; }
+    .update-banner[hidden] { display: none; }
+
+    .board-toolbar { display: flex; align-items: center; gap: .6rem; margin: 1rem 0 .75rem; flex-wrap: wrap; }
+    .search-form { display: flex; gap: .4rem; align-items: center; flex: 1; min-width: 280px; flex-wrap: wrap; }
+    .search-form input[type=text] { margin: 0; flex: 1; min-width: 220px; }
+    .search-form select { margin: 0; width: auto; }
+    .cost-cap-form { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+    .cost-cap-form input { margin: 0; width: 5rem; }
+    .cost-cap-form select { margin: 0; width: auto; min-width: 5.5rem; }
+    .cost-cap-form label { margin: 0; white-space: nowrap; }
+    .settings-gear-btn { display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); cursor: pointer; font-size: 1.1rem; flex-shrink: 0; }
+    .settings-gear-btn:hover { border-color: var(--border-strong); color: var(--text); }
+    /* dialog.settings-modal / .modal-close base styling now lives in
+       design-system.css, shared with the base.html brand switcher dialog. */
+
+    details.emails-panel { margin-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; background: var(--bg-raised); }
+    details.emails-panel summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
+    .emails-table-wrap { overflow-x: auto; margin-top: .6rem; }
+    table.emails-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: .8rem; }
+    table.emails-table td, table.emails-table th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); }
+    table.emails-table th { color: var(--text-muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .02em; }
+
+    .board { display: flex; gap: .9rem; overflow-x: auto; align-items: flex-start; padding-bottom: .5rem; }
+    .column { flex: 0 0 270px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; height: calc(100vh - 16rem); overflow-y: auto; }
+
+    @media (max-width: 640px) {
+      .board-toolbar { flex-direction: column; align-items: stretch; }
+      .search-form, .cost-cap-form { min-width: 0; width: 100%; }
+      .search-form input[type=text] { min-width: 0; flex-basis: 100%; }
+      .board { gap: .6rem; scroll-snap-type: x proximity; }
+      .column { flex-basis: 84vw; height: calc(100vh - 24rem); scroll-snap-align: start; }
+    }
+    .column h3 { margin: 0 0 .6rem; font-size: .82rem; font-weight: 650; display: flex; align-items: center; gap: .4rem; justify-content: space-between; position: sticky; top: 0; background: var(--bg-subtle); padding-bottom: .3rem; }
+    .column h3 .count { color: var(--text-faint); font-weight: 600; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 999px; padding: 0 .45rem; font-size: .72rem; }
+    .approve-all-form { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .6rem; }
+    .approve-all-form select { margin: 0; font-size: .78rem; padding: .35rem .5rem; }
+    .approve-all-form .btn { width: 100%; justify-content: center; }
+    .scheduled-row { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .5rem 0; border-top: 1px solid var(--border); font-size: .85rem; }
+    .scheduled-row:first-of-type { border-top: none; }
+    .scheduled-row form { margin: 0; }
+    .custom-range-fields { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
+    .custom-range-fields[hidden] { display: none; }
+    .empty-col { color: var(--text-faint); font-size: .78rem; padding: .3rem; }
+
+    /* Minimal card: title + one-line snippet + tiny meta row of icons. */
+    .kcard { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-sm);
+             padding: .6rem .7rem; margin-bottom: .5rem; font-size: .8rem; cursor: pointer; box-shadow: var(--shadow-sm); transition: border-color .12s, transform .12s; }
+    .kcard:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+    .kcard.processing { border-color: var(--warning); }
+    .kcard.errored { border-color: var(--danger); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -0.15em; opacity: .8; }
+    .spinner-sm { width: .75em; height: .75em; border-width: 2px; }
+    .processing-state { display: flex; align-items: flex-start; gap: .55rem; }
+    .processing-state .spinner { width: 1.1em; height: 1.1em; margin-top: .15em; flex-shrink: 0; color: var(--warning); }
+    .kcard .title { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: .25rem; }
+    .kcard .snippet { color: var(--text-muted); font-size: .74rem; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: .35rem; }
+    .kcard .icon-row { display: flex; align-items: center; gap: .4rem; font-size: .72rem; color: var(--text-faint); }
+    .discarded-col .kcard { opacity: .72; }
+
+    /* Modal: native <dialog>, one per card, opened via onclick. */
+    dialog.kmodal { width: min(560px, 92vw); border: none; border-radius: var(--radius-lg); padding: 1.35rem 1.5rem; background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow); }
+    dialog.kmodal::backdrop { background: rgba(10, 10, 14, .5); backdrop-filter: blur(2px); }
+    dialog.kmodal h2 { margin: 0 1.7rem .3rem 0; font-size: 1.1rem; }
+
+    @media (max-width: 480px) {
+      dialog.kmodal { padding: 1.1rem 1rem; max-height: 88vh; }
+    }
+    dialog.kmodal .modal-meta { color: var(--text-muted); font-size: .82rem; margin-bottom: .9rem; }
+    dialog.kmodal .modal-body { margin-bottom: .8rem; white-space: pre-wrap; font-size: .9rem; }
+    dialog.kmodal .modal-close { position: absolute; top: .7rem; right: .8rem; background: none; border: none; font-size: 1.2rem; color: var(--text-faint); padding: .2rem .5rem; cursor: pointer; border-radius: var(--radius-sm); }
+    dialog.kmodal .modal-close:hover { background: var(--bg-subtle); color: var(--text); }
+    dialog.kmodal form { margin: 0; }
+    dialog.kmodal .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .7rem; }
+    dialog.kmodal img.media-preview, dialog.kmodal video.media-preview { max-width: 100%; border-radius: var(--radius-sm); margin-bottom: .6rem; display: block; }
+    dialog.kmodal video.media-preview { max-height: 70vh; }
+    dialog.kmodal .hashtags { color: var(--primary); font-size: .85rem; margin-bottom: .6rem; }
+    dialog.kmodal select { width: auto; }
+    dialog.kmodal .error-box { background: var(--danger-tint); border: 1px solid var(--danger); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; margin-bottom: .6rem; font-size: .82rem; white-space: pre-wrap; }
+  </style>
+
+  <h1 style="margin-bottom:.4rem">Board</h1>
+  {% if error %}<div class="badge badge-danger" style="margin-bottom:.5rem">{{ error }}</div>{% endif %}
+  {% if fetched is not none %}
+    <div class="update-banner" style="margin-bottom:.5rem">
+      {% if fetched > 0 %}
+        Fetched {{ fetched }} new email{{ 's' if fetched != 1 }} - processing {{ pending }} in the background now, cards will appear as they finish (watch for the "Some cards have updated" banner below).
+      {% elif pending %}
+        No new emails this time, but {{ pending }} from before {{ "is" if pending == 1 else "are" }} still processing.
+      {% else %}
+        No new emails found.
+      {% endif %}
+    </div>
+  {% endif %}
+  <div id="update-banner" class="update-banner" hidden>
+    Some cards have updated.
+    <button type="button" class="btn btn-primary btn-sm" onclick="location.reload()">Refresh</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('update-banner').hidden = true">Dismiss</button>
+  </div>
+
+  <div class="board-toolbar">
+    <form method="post" action="/board/fetch">
+      <button type="submit" class="btn btn-primary">Fetch now</button>
+    </form>
+
+    <form class="search-form" method="post" action="/board/search-query">
+      <select onchange="this.form.query.value = this.value">
+        <option value="">Preset...</option>
+        {% for value, label in search_presets %}
+          <option value="{{ value }}" {% if value == search_query %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="query" value="{{ search_query }}" placeholder='Gmail search, e.g. category:promotions OR label:Newsletters'>
+      <button type="submit" class="btn">Save search</button>
+    </form>
+
+    <button type="button" class="settings-gear-btn" title="Reel &amp; auto-mode settings" onclick="document.getElementById('settings-modal').showModal()">⚙️</button>
+  </div>
+
+  <dialog id="settings-modal" class="settings-modal">
+    <button type="button" class="modal-close" onclick="document.getElementById('settings-modal').close()">✕</button>
+    <h2>Settings</h2>
+
+    <div class="settings-section">
+      <label class="section-label">Gmail fetch window</label>
+      <p class="faint" style="margin:0 0 .5rem">Last fetched: {{ gmail_last_fetch_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+      <form method="post" action="/board/gmail-refetch-since" title="Rewinds the fetch cursor to midnight UTC on this date, then fetches immediately - use this to re-pull older mail on demand">
+        <label>Refetch since</label>
+        <input type="date" name="since_date" required>
+        <button type="submit" class="btn btn-sm">Refetch</button>
+      </form>
+      <p class="hint">Safe to run repeatedly - anything already fetched for this brand is skipped either way, so this only surfaces what's actually new within the window.</p>
+    </div>
+
+    <div class="settings-section">
+      <label class="section-label">Reel cost cap</label>
+      <form method="post" action="/board/reel-cost-cap" title="Hard cap per reel - generation stops once the next scene would exceed it">
+        <label>$</label>
+        <input type="number" step="0.10" min="0" name="cap_usd" value="{{ '%.2f' | format(reel_cost_cap) }}">
+        <button type="submit" class="btn btn-sm">Save</button>
+      </form>
+    </div>
+
+    <div class="settings-section">
+      <label class="section-label">Reel video model</label>
+      <form method="post" action="/board/reel-video-model" title="Veo tier for the next reel generated - standard is ~5x lite's cost">
+        <select name="model_key" onchange="this.form.requestSubmit()">
+          {% for key, model_id in video_model_choices.items() %}
+            <option value="{{ key }}" {% if key == reel_video_model_key %}selected{% endif %}>{{ key }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <p class="hint">Standard is ~5x lite's per-second cost.</p>
+    </div>
+
+    <div class="settings-section">
+      <label class="section-label">Auto mode</label>
+      <form method="post" action="/board/auto-mode" title="Skips Needs Review, Content Review, AND Media Review for high-scoring items - generates a poster/reel and auto-approves it with zero clicks.">
+        <label><input type="checkbox" name="enabled" style="width:auto; margin:0" {% if auto_mode.enabled %}checked{% endif %}> Enabled</label>
+        <label>min score</label>
+        <input type="number" step="0.05" min="0" max="1" name="min_score" value="{{ '%.2f' | format(auto_mode.min_score) }}">
+        <select name="format">
+          <option value="poster" {% if auto_mode.format == "poster" %}selected{% endif %}>poster</option>
+          <option value="reel" {% if auto_mode.format == "reel" %}selected{% endif %}>reel</option>
+          <option value="text_only" {% if auto_mode.format == "text_only" %}selected{% endif %}>text only</option>
+        </select>
+        <label title="Also sends via WhatsApp automatically once approved - with this off, items still land on Approved with zero clicks, you just click Send yourself."><input type="checkbox" name="auto_send" style="width:auto; margin:0" {% if auto_mode.auto_send %}checked{% endif %}> Auto-send via WhatsApp</label>
+        <button type="submit" class="btn btn-sm">Save</button>
+      </form>
+      <p class="hint">Generates, approves, and (if "Auto-send" is checked) sends via WhatsApp with zero clicks for items clearing the score threshold - nothing is reviewed by you before it goes out.</p>
+    </div>
+  </dialog>
+
+  <dialog id="auto-schedule-modal" class="settings-modal">
+    <button type="button" class="modal-close" onclick="document.getElementById('auto-schedule-modal').close()">✕</button>
+    <h2>Auto-schedule Approved posts</h2>
+    <p class="faint" style="margin-top:-.4rem">Spreads every Approved post that isn't already scheduled across a date range, oldest-approved-first, to all your configured Postiz channels.</p>
+
+    <form method="post" action="/board/auto-schedule" onsubmit="return submitAutoSchedule(this)" style="display:block">
+      <div class="settings-section" style="padding-top:0; border-top:none">
+        <label class="section-label">Range</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="week" checked onchange="toggleCustomRange(this.form)" style="width:auto"> This week (next 7 days)</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="2weeks" onchange="toggleCustomRange(this.form)" style="width:auto"> Next 2 weeks</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="custom" onchange="toggleCustomRange(this.form)" style="width:auto"> Custom range</label>
+
+        <div class="custom-range-fields" hidden>
+          <input type="date" name="start_date">
+          <span class="faint">to</span>
+          <input type="date" name="end_date">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <label class="section-label">Posts per day</label>
+        <input type="number" name="posts_per_day" value="1" min="1" max="20" style="width:6rem">
+      </div>
+
+      <div class="settings-section">
+        <label class="section-label">Spread posts between</label>
+        <div style="display:flex; gap:.5rem; align-items:center">
+          <input type="time" name="day_start_time" value="09:00" style="width:auto">
+          <span class="faint">and</span>
+          <input type="time" name="day_end_time" value="21:00" style="width:auto">
+        </div>
+        <p class="hint">Local time - posts on a day with more than one slot are spaced evenly across this window.</p>
+      </div>
+
+      <input type="hidden" name="day_start_hour">
+      <input type="hidden" name="day_end_hour">
+      <input type="hidden" name="tz_offset_minutes">
+      <button type="submit" class="btn btn-primary" style="margin-top:.8rem; width:100%">Schedule</button>
+    </form>
+  </dialog>
+
+  <details class="emails-panel">
+    <summary>Fetched emails ({{ recent_emails | length }} most recent) — which mails have been looked at</summary>
+    <div class="emails-table-wrap">
+      <table class="emails-table">
+        <tr><th>Subject</th><th>From</th><th>Status</th><th>Articles found</th><th>Fetched</th></tr>
+        {% for email in recent_emails %}
+          <tr>
+            <td>{{ email.subject or "(no subject)" }}</td>
+            <td>{{ email.sender }}</td>
+            <td>{{ email.status }}</td>
+            <td>{{ email.articles_found if email.articles_found is not none else "-" }}</td>
+            <td>{{ email.created_at }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">Nothing fetched yet.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </details>
+
+  {% macro priority_dot(score) %}
+    {% if score is not none %}
+      {% set color = "var(--success)" if score >= 0.7 else ("var(--warning)" if score >= 0.4 else "var(--text-faint)") %}
+      <span class="dot" style="background:{{ color }}" title="priority {{ '%.2f' | format(score) }}"></span>
+    {% endif %}
+  {% endmacro %}
+
+  {% macro media_preview(media) %}
+    {% if media %}
+      {% if media[1] == "reel" %}
+        <video class="media-preview" src="{{ media[0] }}" controls playsinline></video>
+      {% else %}
+        <img class="media-preview" src="{{ media[0] }}" alt="Generated media">
+      {% endif %}
+    {% endif %}
+  {% endmacro %}
+
+  {% macro card(item, key, email, media, cost, posts=none) %}
+    <div class="kcard {% if item.is_processing %}processing{% elif item.last_error %}errored{% endif %}" data-item-id="{{ item.id }}" data-status="{{ 'processing' if item.is_processing else ('errored' if item.last_error else 'done') }}" onclick="document.getElementById('modal-{{ item.id }}').showModal()">
+      <div class="title">{{ item.article_title or "(untitled)" }}</div>
+      {% if item.is_processing %}
+        <span class="badge badge-warning"><span class="spinner spinner-sm" aria-hidden="true"></span> Working&hellip;</span>
+      {% elif item.last_error %}
+        <span class="badge badge-danger">Failed - open to retry</span>
+      {% elif key == "scheduled" and posts %}
+        <div class="snippet">
+          {% for post in posts[:2] %}{{ post.channel_name or post.channel_identifier }} &middot; {{ post.scheduled_at.strftime('%a %d %b, %H:%M') }}{{ " UTC" }}<br>{% endfor %}
+          {% if posts | length > 2 %}+{{ posts | length - 2 }} more&hellip;{% endif %}
+        </div>
+      {% elif key in ("analyzed", "drafted", "media_generated") and item.brief %}
+        <div class="snippet">{{ item.copy_text or item.brief }}</div>
+      {% elif key == "discarded" and item.priority_rationale %}
+        <div class="snippet">{{ item.priority_rationale }}</div>
+      {% endif %}
+      <div class="icon-row">
+        {{ priority_dot(item.priority_score) }}
+        {% if item.article_url %}<span title="has article link">&#128279;</span>{% endif %}
+        {% if media %}<span title="has generated media">{{ "🎬" if media[1] == "reel" else "🖼️" }}</span>{% endif %}
+        {% if item.format %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.format }}</span>{% endif %}
+        {% if item.format and item.language and item.language != "en" %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.language }}</span>{% endif %}
+        {% if email %}<span title="{{ email.sender }}">&#9993; {{ email.sender.split('<')[0].strip()[:18] }}</span>{% endif %}
+        {% if cost %}<span class="badge badge-neutral" style="font-size:.65rem" title="Total LLM + media generation cost so far">${{ '%.2f' | format(cost) }}</span>{% endif %}
+      </div>
+    </div>
+
+    <dialog class="kmodal" id="modal-{{ item.id }}">
+      <button class="modal-close" onclick="document.getElementById('modal-{{ item.id }}').close()" aria-label="Close">&times;</button>
+      <h2>{{ item.article_title or "(untitled)" }}</h2>
+      <div class="modal-meta">
+        {% if email %}From {{ email.sender }} &middot; email subject: {{ email.subject }}<br>{% endif %}
+        {% if item.priority_score is not none %}Priority {{ "%.2f" | format(item.priority_score) }}{% endif %}
+        {% if item.article_url %} &middot; <a href="{{ item.article_url }}" target="_blank" rel="noopener">open article &#8599;</a>{% endif %}
+      </div>
+
+      {% if item.is_processing %}
+        <div class="processing-state">
+          <span class="spinner" aria-hidden="true"></span>
+          <p class="muted" style="margin:0">Working on this - poster/text generation usually takes seconds, a reel scene can take a few minutes. Close this and keep browsing; the card updates on its own when it's done.</p>
+        </div>
+
+      {% elif item.last_error and item.stage != "approved" %}
+        <div class="error-box">{{ item.last_error }}</div>
+        <div class="actions">
+          {% if item.stage == "analyzed" %}
+          <form method="post" action="/board/{{ item.id }}/retry-content-writer">
+          {% elif item.format == "reel" %}
+          <form method="post" action="/board/{{ item.id }}/retry-reel">
+          {% else %}
+          <form method="post" action="/board/{{ item.id }}/retry-poster">
+          {% endif %}
+            <button type="submit" class="btn btn-primary">Retry</button>
+          </form>
+          <form method="post" action="/board/{{ item.id }}/discard">
+            <button type="submit" class="btn btn-danger">Discard</button>
+          </form>
+        </div>
+
+      {% elif key == "researched" %}
+        <p class="muted">Fetching the article and writing a brief - refresh in a moment. If it's still here after a while, the fetch or LLM call may have failed - use Discard below and it'll be retried on the next fetch.</p>
+        <form method="post" action="/board/{{ item.id }}/discard" class="actions">
+          <button type="submit" class="btn btn-danger">Discard</button>
+        </form>
+
+      {% elif key == "analyzed" %}
+        <div class="modal-body">{{ item.brief }}</div>
+        <form method="post" action="/board/{{ item.id }}/decide">
+          <label>Format (only used if sent to Content Writer)</label>
+          <select name="format">
+            <option value="text_only">Text only</option>
+            <option value="poster">Poster</option>
+            <option value="reel">Reel (video)</option>
+          </select>
+          <label>Language (only used if sent to Content Writer)</label>
+          <select name="language">
+            {% for code, name in language_choices.items() %}
+              <option value="{{ code }}" {% if code == default_language %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+          <label>Feedback (optional, used if sent to Content Writer or discarded)</label>
+          <textarea name="feedback" rows="2"></textarea>
+          <div class="actions">
+            <button type="submit" name="decision" value="write_myself" class="btn">Write myself</button>
+            <button type="submit" name="decision" value="send_to_content_writer" class="btn btn-primary">Send to Content Writer</button>
+            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
+          </div>
+        </form>
+
+      {% elif key == "drafted" %}
+        <div class="modal-body">{{ item.copy_text }}</div>
+        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        {% if item.format == "poster" and item.poster_headline %}<p class="muted">Poster headline: "{{ item.poster_headline }}"</p>{% endif %}
+        {% if item.format == "poster" and item.poster_template %}
+          <form method="post" action="/board/{{ item.id }}/poster-template">
+            <label>Poster layout</label>
+            <select name="poster_template" onchange="this.form.requestSubmit()">
+              {% for value, label in template_choices.items() %}
+                <option value="{{ value }}" {% if value == item.poster_template %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        {% endif %}
+        {% if item.format == "reel" and item.reel_script %}<p class="muted">Reel script: {{ item.reel_script }}</p>{% endif %}
+        {% if item.format == "reel" and item.reel_template %}
+          <form method="post" action="/board/{{ item.id }}/reel-template">
+            <label>Reel style</label>
+            <select name="reel_template" onchange="this.form.requestSubmit()">
+              {% for value, label in reel_template_choices.items() %}
+                <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        {% endif %}
+        <form method="post" action="/board/{{ item.id }}/decide">
+          <label>Feedback (used if you ask for a regenerate)</label>
+          <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
+          <div class="actions">
+            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve{% if item.format == "poster" %} &amp; generate poster{% elif item.format == "reel" %} &amp; generate reel{% endif %}</button>
+            <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
+            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
+          </div>
+        </form>
+        {% if item.format == "text_only" %}
+          <p class="faint">Want a graphic or video for this post instead of (or alongside) plain text? This approves it first, then generates the new format - the caption above stays exactly as written.</p>
+          <div class="actions">
+            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
+              <input type="hidden" name="target_format" value="poster">
+              <button type="submit" class="btn">Approve &amp; generate poster</button>
+            </form>
+            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
+              <input type="hidden" name="target_format" value="reel">
+              <button type="submit" class="btn">Approve &amp; generate reel</button>
+            </form>
+          </div>
+        {% endif %}
+
+      {% elif key == "media_generated" %}
+        {{ media_preview(media) }}
+        <div class="modal-body">{{ item.copy_text }}</div>
+        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        {% if item.format == "reel" and item.reel_template %}
+          <form method="post" action="/board/{{ item.id }}/reel-template">
+            <label>Reel style (changing this clears the shot list, so Regenerate builds a fresh one)</label>
+            <select name="reel_template" onchange="this.form.requestSubmit()">
+              {% for value, label in reel_template_choices.items() %}
+                <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        {% endif %}
+        <form method="post" action="/board/{{ item.id }}/decide">
+          <label>Feedback (used if you ask for a regenerate)</label>
+          <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
+          <div class="actions">
+            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve</button>
+            <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
+            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
+          </div>
+        </form>
+        {% if item.copy_text %}
+          <p class="faint">Not happy with this {{ item.format }}? Generate the other format instead - same approved caption, new headline/script generated for it.</p>
+          <div class="actions">
+            {% if item.format != "poster" %}
+              <form method="post" action="/board/{{ item.id }}/generate-media">
+                <input type="hidden" name="target_format" value="poster">
+                <button type="submit" class="btn">Generate poster instead</button>
+              </form>
+            {% endif %}
+            {% if item.format != "reel" %}
+              <form method="post" action="/board/{{ item.id }}/generate-media">
+                <input type="hidden" name="target_format" value="reel">
+                <button type="submit" class="btn">Generate reel instead</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
+
+      {% elif key == "approved" %}
+        {{ media_preview(media) }}
+        {% if item.last_error %}<div class="error-box">{{ item.last_error }}</div>{% endif %}
+        {% if item.copy_text %}
+          <div class="modal-body">{{ item.copy_text }}</div>
+          {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin-bottom:.75rem" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now?')">
+            <button type="submit" class="btn btn-primary">Send via WhatsApp</button>
+          </form>
+          <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin-bottom:.75rem; align-items:center" onsubmit="return submitPostiz(this)">
+            <input type="datetime-local" name="schedule_at" style="width:auto">
+            <button type="submit" class="btn">Send to Postiz</button>
+          </form>
+          <p class="faint">Add a graphic or video for this same post - the caption above stays exactly as approved, only the new format's headline/script gets generated.</p>
+          <div class="actions">
+            <form method="post" action="/board/{{ item.id }}/generate-media">
+              <input type="hidden" name="target_format" value="poster">
+              <button type="submit" class="btn">Generate poster</button>
+            </form>
+            <form method="post" action="/board/{{ item.id }}/generate-media">
+              <input type="hidden" name="target_format" value="reel">
+              <button type="submit" class="btn">Generate reel</button>
+            </form>
+          </div>
+        {% else %}
+          <p class="muted">You're writing this one yourself.</p>
+          <div class="modal-body">{{ item.brief }}</div>
+        {% endif %}
+        <form method="post" action="/board/{{ item.id }}/discard" class="actions">
+          <button type="submit" class="btn btn-danger">Discard</button>
+        </form>
+
+      {% elif key == "scheduled" %}
+        {{ media_preview(media) }}
+        {% if item.last_error %}<div class="error-box">{{ item.last_error }}</div>{% endif %}
+        {% if item.copy_text %}<div class="modal-body">{{ item.copy_text }}</div>{% endif %}
+        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        <p class="muted" style="margin-bottom:.4rem">Scheduled to Postiz:</p>
+        {% for post in posts %}
+          <div class="scheduled-row">
+            <span>{{ post.channel_name or post.channel_identifier }} <span class="faint">({{ post.channel_identifier }})</span> &middot; {{ post.scheduled_at.strftime('%a %d %b %Y, %H:%M') }} UTC</span>
+            <form method="post" action="/board/{{ item.id }}/postiz-posts/{{ post.postiz_post_id }}/cancel" onsubmit="return confirm('Cancel this scheduled post?')">
+              <button type="submit" class="btn btn-sm btn-ghost">Cancel</button>
+            </form>
+          </div>
+        {% endfor %}
+        <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin:.75rem 0; align-items:center" onsubmit="return submitPostiz(this)">
+          <input type="datetime-local" name="schedule_at" style="width:auto">
+          <button type="submit" class="btn">Send to Postiz</button>
+        </form>
+
+      {% elif key == "discarded" %}
+        <p class="muted">Rationale: {{ item.priority_rationale }}</p>
+        {% if item.article_summary %}<div class="modal-body">{{ item.article_summary }}</div>{% endif %}
+      {% endif %}
+    </dialog>
+  {% endmacro %}
+
+  <div class="board">
+    {% for key, label, stage in columns %}
+      <div class="column">
+        <h3>{{ label }} <span class="count">{{ items_by_stage[key] | length }}</span></h3>
+        {% if key in ("analyzed", "drafted", "media_generated") and items_by_stage[key] %}
+          <form method="post" action="/board/approve-all" class="approve-all-form"
+                onsubmit="return confirm('Approve all {{ items_by_stage[key] | length }} card(s) in {{ label }}? Each will start generating in the background - this can incur real cost.')">
+            <input type="hidden" name="stage" value="{{ key }}">
+            {% if key == "analyzed" %}
+              <select name="format" title="Format for every card sent to Content Writer">
+                <option value="text_only">Text only</option>
+                <option value="poster" selected>Poster</option>
+                <option value="reel">Reel (video)</option>
+              </select>
+              <select name="language" title="Language for every card sent to Content Writer">
+                {% for code, name in language_choices.items() %}
+                  <option value="{{ code }}" {% if code == default_language %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+              </select>
+            {% endif %}
+            <button type="submit" class="btn btn-sm btn-primary">Approve all ({{ items_by_stage[key] | length }})</button>
+          </form>
+        {% endif %}
+        {% if key == "approved" %}
+          <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('auto-schedule-modal').showModal()">Auto-schedule&hellip;</button>
+        {% endif %}
+        {% for item in items_by_stage[key] %}
+          {{ card(item, key, emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
+        {% else %}
+          <div class="empty-col">Nothing here.</div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+
+    <div class="column">
+      <h3>Scheduled <span class="count">{{ scheduled_items | length }}</span></h3>
+      {% for item in scheduled_items %}
+        {{ card(item, "scheduled", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id), scheduled_posts_by_item_id.get(item.id)) }}
+      {% else %}
+        <div class="empty-col">Nothing scheduled.</div>
+      {% endfor %}
+    </div>
+
+    <div class="column discarded-col">
+      <h3>Discarded <span class="count">{{ discarded | length }}</span></h3>
+      {% for item in discarded %}
+        {{ card(item, "discarded", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
+      {% else %}
+        <div class="empty-col">Nothing discarded.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <script>
+    // datetime-local inputs give a naive wall-clock string with no
+    // timezone ("2026-09-07T17:55") - sent as-is, the server has no way to
+    // know it means the browser's local time, and Postiz was reading it as
+    // UTC (17:55 IST got scheduled for 17:55 UTC = 23:25 IST). Convert to a
+    // real UTC ISO timestamp here, where the actual offset is known, before
+    // the form submits. Blank stays blank (send now).
+    function submitPostiz(form) {
+      if (!confirm('Send this post to your configured Postiz channels now?')) return false;
+      var input = form.querySelector('input[name="schedule_at"]');
+      if (input && input.value) {
+        input.value = new Date(input.value).toISOString();
+      }
+      return true;
+    }
+
+    function toggleCustomRange(form) {
+      var isCustom = form.querySelector('input[name="range_preset"]:checked').value === 'custom';
+      form.querySelector('.custom-range-fields').hidden = !isCustom;
+    }
+
+    // Converts the two time-of-day pickers to fractional hours and grabs
+    // the browser's real UTC offset (same reasoning as submitPostiz above -
+    // the server has no other way to know what timezone these times mean).
+    function submitAutoSchedule(form) {
+      function toHourFraction(t) {
+        var parts = (t || '09:00').split(':');
+        return parseInt(parts[0], 10) + (parseInt(parts[1], 10) || 0) / 60;
+      }
+      form.querySelector('input[name="day_start_hour"]').value = toHourFraction(form.day_start_time.value);
+      form.querySelector('input[name="day_end_hour"]').value = toHourFraction(form.day_end_time.value);
+      form.querySelector('input[name="tz_offset_minutes"]').value = new Date().getTimezoneOffset();
+
+      var preset = form.querySelector('input[name="range_preset"]:checked').value;
+      var label = preset === 'week' ? 'this week' : preset === '2weeks' ? 'the next 2 weeks' : 'the selected range';
+      if (preset === 'custom' && (!form.start_date.value || !form.end_date.value)) {
+        alert('Pick a start and end date first.');
+        return false;
+      }
+      return confirm('Auto-schedule your unscheduled Approved posts across ' + label + '? This starts posting to Postiz in the background.');
+    }
+
+    // Click-outside-to-close for every card's <dialog>.
+    document.querySelectorAll('dialog.kmodal').forEach(function (dialog) {
+      dialog.addEventListener('click', function (e) {
+        if (e.target === dialog) dialog.close();
+      });
+    });
+
+    // Background actions (content generation, WhatsApp sends, ...) update
+    // the card once they finish server-side, but there's no push channel to
+    // this page. Poll quietly while anything's processing and surface a
+    // dismissible "Updated" banner instead of reloading outright - an
+    // earlier version force-reloaded the whole page every few seconds,
+    // which yanked you back to the top mid-scroll/mid-read. Refreshing is
+    // now always something you click, never something that just happens.
+    (function () {
+      var watched = document.querySelectorAll('.kcard[data-status="processing"]');
+      if (!watched.length) return;
+
+      function signature(root) {
+        return Array.prototype.map.call(
+          root.querySelectorAll('.kcard[data-item-id]'),
+          function (el) { return el.dataset.itemId + ':' + el.dataset.status; }
+        ).sort().join('|');
+      }
+
+      var initial = signature(document);
+      var banner = document.getElementById('update-banner');
+      var poll = setInterval(function () {
+        fetch(location.href, { credentials: 'same-origin' })
+          .then(function (res) { return res.text(); })
+          .then(function (html) {
+            var fresh = new DOMParser().parseFromString(html, 'text/html');
+            if (signature(fresh) !== initial) {
+              banner.hidden = false;
+              clearInterval(poll);
+            }
+          })
+          .catch(function () { clearInterval(poll); });
+      }, 6000);
+    })();
+  </script>
+{% endblock %}

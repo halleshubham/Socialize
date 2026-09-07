@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Account - Socialize{% endblock %}
+{% block content %}
+  <h1>Account</h1>
+  <p class="muted">Your own LLM provider API keys. When a brand you own generates content, these fund it - a brand shared with you as a member still bills to <em>its owner's</em> keys, never yours. Leave a provider unset to fall back to this deployment's shared key (if one is configured in .env).</p>
+
+  <div class="panel">
+    <h3>API keys</h3>
+    {% for provider in providers %}
+      <div style="display:flex; align-items:center; gap:.6rem; padding:.5rem 0; {% if not loop.first %}border-top:1px solid var(--border);{% endif %}">
+        <div style="flex:0 0 220px">
+          <strong>{{ provider_labels[provider] }}</strong><br>
+          <span class="badge {{ 'badge-success' if keys_set[provider] else 'badge-neutral' }}">{{ "Key set" if keys_set[provider] else "Not set - using .env fallback" }}</span>
+        </div>
+        <form method="post" action="/account/api-keys" style="display:flex; gap:.5rem; flex:1; margin:0">
+          <input type="hidden" name="provider" value="{{ provider }}">
+          <input type="password" name="api_key" placeholder="Paste a new key to replace it" style="margin:0; flex:1">
+          <button type="submit" class="btn btn-sm">Save</button>
+        </form>
+        {% if keys_set[provider] %}
+          <form method="post" action="/account/api-keys/{{ provider }}/clear" style="margin:0">
+            <button type="submit" class="btn btn-ghost btn-sm">Clear</button>
+          </form>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}

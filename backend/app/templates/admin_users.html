@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Admin - Socialize{% endblock %}
+{% block content %}
+  <h1>Users</h1>
+  <p class="muted">Create accounts for people you want to share brands with — there's no self-serve signup, so an admin makes the account and shares the login (email + password) out of band.</p>
+  {% if error %}<div class="badge badge-danger" style="margin-bottom:1rem">{{ error }}</div>{% endif %}
+
+  <div class="panel">
+    <h3>Add user</h3>
+    <form method="post" action="/admin/users" style="display:flex; gap:.6rem; align-items:flex-end; flex-wrap:wrap">
+      <div>
+        <label>Email</label>
+        <input type="email" name="email" required style="margin:0">
+      </div>
+      <div>
+        <label>Password</label>
+        <input type="text" name="password" required style="margin:0" placeholder="Share this with them directly">
+      </div>
+      <button type="submit" class="btn btn-primary">Create user</button>
+    </form>
+  </div>
+
+  <h3>Existing users</h3>
+  {% for u in users %}
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:.6rem">
+        <span>{{ u.email }}</span>
+        {% if u.is_admin %}<span class="badge badge-primary">admin</span>{% endif %}
+        <span class="faint">joined {{ u.created_at }}</span>
+      </div>
+    </div>
+  {% endfor %}
+{% endblock %}

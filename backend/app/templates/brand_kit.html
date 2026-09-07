@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Brand Kit - Socialize{% endblock %}
+{% block content %}
+  <h1>Brand kit</h1>
+  <p class="muted">Your brand identity and what it posts about — the niche below drives what the Researcher agent looks for in your inbox, grounded in the brand info on this page.</p>
+  {% if error %}<div class="badge badge-danger" style="margin-bottom:1rem">{{ error }}</div>{% endif %}
+  {% if gmail_just_connected %}<div class="badge badge-success" style="margin-bottom:1rem">Gmail connected</div>{% endif %}
+
+  <div class="panel">
+    <h3>Gmail</h3>
+    <div style="display:flex; align-items:center; gap:.6rem; flex-wrap:wrap">
+      <span class="badge {{ 'badge-success' if gmail_connected else 'badge-neutral' }}">{{ "Connected" if gmail_connected else "Not connected" }}</span>
+      <a href="/brand-kit/gmail/connect" class="btn btn-sm">{{ "Reconnect" if gmail_connected else "Connect Gmail" }}</a>
+      {% if gmail_connected %}
+        <form method="post" action="/brand-kit/gmail/disconnect" style="margin:0" onsubmit="return confirm('Disconnect Gmail from this brand? Fetching will stop until you reconnect.')">
+          <button type="submit" class="btn btn-ghost btn-sm">Disconnect</button>
+        </form>
+      {% endif %}
+    </div>
+    <p class="faint">This brand's own inbox - "Fetch now" on the board pulls newsletters from here. Each brand connects its own Gmail account.</p>
+  </div>
+
+  <form method="post" action="/brand-kit">
+    <div class="panel">
+      <h3>Identity</h3>
+      <label>Brand name</label>
+      <input type="text" name="brand_name" value="{{ kit.brand_name }}" placeholder="Your Brand">
+
+      <label>Industry / focus</label>
+      <input type="text" name="industry" value="{{ kit.industry }}" placeholder="e.g. vegan bakery in Austin, grassroots political collective">
+      <p class="faint">Used to ground a first-draft niche below — a short, specific line works better than a category label.</p>
+
+      <label>Website</label>
+      <input type="text" name="website_url" value="{{ kit.website_url or '' }}" placeholder="yourbrand.com">
+    </div>
+
+    <div class="panel">
+      <h3>Social handles</h3>
+      <p class="faint" style="margin-top:-.3rem">Shown in the poster's bottom strip. Leave blank to omit a platform.</p>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0 1rem">
+        {% for platform in platforms %}
+          <div>
+            <label>{{ platform | capitalize }}</label>
+            <input type="text" name="social_{{ platform }}" value="{{ kit.social_handles.get(platform, '') }}" placeholder="yourbrand">
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>WhatsApp</h3>
+      <p class="faint" style="margin-top:-.3rem">Where "Send via WhatsApp" (on the board) delivers approved posts, via a Botsab-connected number.</p>
+      <label>Recipient</label>
+      <input type="text" name="whatsapp_recipient" value="{{ kit.whatsapp_recipient or '' }}" placeholder="919876543210@s.whatsapp.net or 120363xxxxx@g.us">
+      <p class="faint">A phone number JID ("...@s.whatsapp.net") for a DM, or a group JID ("...@g.us") to post to a group.</p>
+
+      <label>Botsab instance ID</label>
+      <input type="text" name="botsab_instance_id" value="{{ kit.botsab_instance_id or '' }}" placeholder="Leave blank to use the shared instance from .env">
+
+      <label style="display:flex; align-items:center; gap:.5rem">
+        Botsab API key
+        <span class="badge {{ 'badge-success' if kit.botsab_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.botsab_api_key_encrypted else "Not set - using .env fallback" }}</span>
+      </label>
+      <input type="password" name="botsab_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.botsab_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
+      <p class="faint">This brand's own WhatsApp connection, if it's different from the app's default (.env). Leave both blank to keep using the shared one.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Style</h3>
+      <label>Poster font</label>
+      <select name="font_choice">
+        {% for group_label, keys in font_groups %}
+          <optgroup label="{{ group_label }}">
+            {% for key in keys %}
+              {% set display_name = font_choices[key][0] %}
+              <option value="{{ key }}" {% if key == kit.font_choice %}selected{% endif %}>{{ display_name }}</option>
+            {% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
+      <p class="faint">Devanagari-labeled fonts render Hindi/Marathi posters/reels correctly - others fall back to Noto Sans Devanagari automatically for those languages.</p>
+
+      <label>Tone of voice</label>
+      <textarea name="tone_of_voice_prompt" rows="4" placeholder="Confident, concise, a little playful.">{{ kit.tone_of_voice_prompt }}</textarea>
+
+      <label>Default language</label>
+      <select name="default_language">
+        {% for code, name in language_choices.items() %}
+          <option value="{{ code }}" {% if code == kit.default_language %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <p class="faint">Used unless overridden per-post when sending something to the Content Writer.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Combined drafting</h3>
+      <p class="faint" style="margin-top:-.3rem">Skips the separate Content Writer step - drafts the brief and the post together in one cheaper call, and skips straight to Content Review (no separate Needs Review gate). Off by default.</p>
+      <label><input type="checkbox" name="combined_drafting" style="width:auto; margin:0" {% if kit.combined_drafting %}checked{% endif %}> Enabled</label>
+      <label>Draft format</label>
+      <select name="combined_drafting_format">
+        <option value="poster" {% if kit.combined_drafting_format == "poster" %}selected{% endif %}>Poster</option>
+        <option value="reel" {% if kit.combined_drafting_format == "reel" %}selected{% endif %}>Reel</option>
+        <option value="text_only" {% if kit.combined_drafting_format == "text_only" %}selected{% endif %}>Text only</option>
+      </select>
+      <p class="faint">Which format the combined step drafts for directly - pick "Reel" here if this brand mostly wants reels, so it never wastefully drafts+generates a poster first. You can still switch an individual post's format afterward from its Media Review card.</p>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save brand kit</button>
+  </form>
+
+  <div class="panel">
+    <h3>Models</h3>
+    <p class="faint" style="margin-top:-.3rem">Which model funds each step, for this brand only. Leave a step on "Default" to use the app-wide setting.</p>
+    <form method="post" action="/brand-kit/model-overrides">
+      {% for t in model_tasks %}
+        <label>{{ t.label }}</label>
+        <select name="model_{{ t.agent_task }}">
+          <option value="">Default ({{ t.default_label }})</option>
+          {% for (provider, model_id), model_label in model_choices.items() %}
+            <option value="{{ provider }}|{{ model_id }}" {% if t.override == (provider, model_id) %}selected{% endif %}>{{ model_label }}</option>
+          {% endfor %}
+        </select>
+      {% endfor %}
+      <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save models</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>Postiz</h3>
+    <p class="faint" style="margin-top:-.3rem">Where "Send to Postiz" (on the board) publishes approved posts, via your self-hosted Postiz instance.</p>
+    <form method="post" action="/brand-kit/postiz">
+      <label style="display:flex; align-items:center; gap:.5rem">
+        API key
+        <span class="badge {{ 'badge-success' if kit.postiz_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.postiz_api_key_encrypted else "Not set - using .env fallback" }}</span>
+      </label>
+      <input type="password" name="postiz_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.postiz_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
+
+      <label>Channels to post to</label>
+      {% if postiz_channels_available %}
+        {% set selected_ids = kit.postiz_channels | map(attribute='id') | list %}
+        {% for ch in postiz_channels_available %}
+          <label style="display:flex; align-items:center; gap:.5rem; font-weight:400; margin:.3rem 0">
+            <input type="checkbox" name="channel" value="{{ ch.id }}|{{ ch.identifier }}|{{ ch.name }}" style="width:auto; margin:0" {% if ch.id in selected_ids %}checked{% endif %}>
+            {{ ch.name }} <span class="faint">({{ ch.identifier }}{% if ch.disabled %}, disconnected{% endif %})</span>
+          </label>
+        {% endfor %}
+      {% else %}
+        <p class="faint">No channels found - check the API key above, or connect a channel in Postiz first.</p>
+      {% endif %}
+      <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save Postiz settings</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>Logo</h3>
+    <p class="faint" style="margin-top:-.3rem">Shown at the left edge of every generated poster's bottom strip.</p>
+    {% if logo_url %}<img src="{{ logo_url }}" alt="Current logo" style="max-height:60px; display:block; margin-bottom:.6rem">{% endif %}
+    <form method="post" action="/brand-kit/logo" enctype="multipart/form-data" style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap">
+      <input type="file" name="logo" accept="image/*" required>
+      <button type="submit" class="btn btn-sm">{{ "Replace logo" if logo_url else "Upload logo" }}</button>
+    </form>
+  </div>
+
+  {% if is_owner %}
+    <div class="panel">
+      <h3>Members</h3>
+      <p class="faint" style="margin-top:-.3rem">People who can see and operate this brand. Only you (the owner) can manage this list.</p>
+      {% for m in members %}
+        <div style="display:flex; align-items:center; gap:.6rem; padding:.3rem 0">
+          <span>{{ m.user.email }}</span>
+          <span class="badge {{ 'badge-primary' if m.role == 'owner' else 'badge-neutral' }}">{{ m.role }}</span>
+          {% if m.role != "owner" %}
+            <form method="post" action="/brands/{{ active_brand.id }}/members/{{ m.user.id }}/remove" style="margin:0">
+              <button type="submit" class="btn btn-ghost btn-sm">Remove</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endfor %}
+      <form method="post" action="/brands/{{ active_brand.id }}/members" style="display:flex; gap:.5rem; align-items:center; margin-top:.6rem; flex-wrap:wrap">
+        <input type="email" name="email" placeholder="teammate@example.com" required style="margin:0; flex:1; min-width:220px">
+        <button type="submit" class="btn btn-sm">Share brand</button>
+      </form>
+      <p class="faint">The person needs an existing account first — an admin creates one from <a href="/admin/users">Admin</a>.</p>
+    </div>
+  {% endif %}
+
+  <h2 style="margin-top:2rem">Niche</h2>
+  <p class="muted">Describes what the Researcher agent should look for in your inbox. Saving creates a new version — nothing is overwritten.</p>
+
+  <div class="panel">
+    <form method="post" action="/niche">
+      <label>Prompt (what to look for, tone, priorities)</label>
+      <textarea name="prompt_text" rows="8" required>{{ active_niche.prompt_text if active_niche else "" }}</textarea>
+
+      <label>Keywords (comma-separated)</label>
+      <input type="text" name="keywords" value="{{ active_niche.keywords | join(', ') if active_niche else '' }}">
+
+      <div style="display:flex; align-items:center; gap:.75rem; margin-top:1.1rem; flex-wrap:wrap">
+        <button type="submit" class="btn btn-primary">Save as new version</button>
+        {% if active_niche %}<span class="badge badge-primary">v{{ active_niche.version }} active</span>{% endif %}
+      </div>
+    </form>
+  </div>
+
+  <div style="display:flex; gap:.75rem; margin-bottom:1rem; flex-wrap:wrap">
+    <form method="post" action="/niche/draft-from-brand">
+      <button type="submit" class="btn">Draft niche from brand info</button>
+    </form>
+    <form method="post" action="/niche/suggest">
+      <button type="submit" class="btn">Suggest an update from triage history</button>
+    </form>
+  </div>
+  <p class="faint" style="margin-top:-.7rem">"Draft from brand info" uses the saved industry/website/handles above (save changes there first) — good for a brand-new or still-vague niche. "Suggest an update" instead looks at what's actually been triaged so far — better once you have some history.</p>
+
+  {% for cfg in pending_niche_suggestions %}
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem">
+        <span class="badge badge-warning">{{ "Drafted from brand info" if cfg.created_by == "brand_drafted" else "Suggested" }} · v{{ cfg.version }}</span>
+        <span class="faint">{{ cfg.created_at }}</span>
+      </div>
+      <p>{{ cfg.prompt_text }}</p>
+      <p class="muted">Keywords: {{ cfg.keywords | join(', ') }}</p>
+      {% if cfg.rationale %}<p class="muted">Why: {{ cfg.rationale }}</p>{% endif %}
+      <form method="post" action="/niche/activate/{{ cfg.id }}">
+        <button type="submit" class="btn btn-primary btn-sm">Activate this version</button>
+      </form>
+    </div>
+  {% endfor %}
+
+  <details class="disclosure">
+    <summary>History ({{ niche_history | length }} version{{ 's' if niche_history | length != 1 }})</summary>
+    {% for cfg in niche_history %}
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem">
+          <span class="badge {{ 'badge-primary' if cfg.is_active else 'badge-neutral' }}">v{{ cfg.version }}{{ ' · active' if cfg.is_active else '' }}</span>
+          <span class="faint">{{ cfg.created_by }} · {{ cfg.created_at }}</span>
+        </div>
+        <p>{{ cfg.prompt_text }}</p>
+      </div>
+    {% else %}
+      <p class="muted">No versions yet.</p>
+    {% endfor %}
+  </details>
+{% endblock %}
