@@ -28,7 +28,9 @@ _PLATFORM_SETTINGS_DEFAULTS = {
 
 
 class PostizSendError(Exception):
-    pass
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def get_postiz_client(brand_kit: BrandKit | None) -> PostizClient | None:
@@ -115,7 +117,7 @@ def send_content_item(db: Session, content_item: ContentItem, schedule_at: datet
 
         results = client.create_posts(entries, schedule_at=schedule_at)
     except PostizError as exc:
-        raise PostizSendError(str(exc)) from exc
+        raise PostizSendError(str(exc), retry_after=exc.retry_after) from exc
 
     # One PostizPost row per targeted channel - results is documented as
     # [{postId, integration}] in the same order as `entries`/`channels`, but

@@ -15,7 +15,10 @@ _TIMEOUT_SECONDS = 60  # video uploads are larger than a poster PNG, same reason
 
 
 class PostizError(Exception):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, retry_after: float | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class PostizClient:
@@ -84,4 +87,15 @@ class PostizClient:
                 detail = response.json()
             except Exception:
                 detail = response.text
-            raise PostizError(f"Postiz API error {response.status_code}: {detail}")
+            retry_after = None
+            header_val = response.headers.get("Retry-After")
+            if header_val:
+                try:
+                    retry_after = float(header_val)
+                except ValueError:
+                    retry_after = None
+            raise PostizError(
+                f"Postiz API error {response.status_code}: {detail}",
+                status_code=response.status_code,
+                retry_after=retry_after,
+            )

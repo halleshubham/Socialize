@@ -881,12 +881,25 @@ def cancel_postiz_post(
     return RedirectResponse(url="/board", status_code=303)
 
 
-_AUTO_SCHEDULE_ITEM_DELAY_SECONDS = 5
-# A gentle pace between items, not a guarantee of staying under Postiz's
-# documented 30 req/hour self-hosted cap (each item is 1-2 calls, so a large
-# batch can still exceed it - failures surface per-card via last_error the
-# same as any other board action, and re-running Auto-schedule only retries
-# items that don't already have a PostizPost row, so it's a safe retry).
+_AUTO_SCHEDULE_ITEM_DELAY_SECONDS = 240
+# Paced to Postiz's documented 30 req/hour self-hosted cap - each item costs
+# 1-2 calls (upload + create), so 240s/item keeps a full run to ~15 items/
+# hour, comfortably inside that budget (an earlier 5s pace hit 429s almost
+# immediately). A 429 specifically also gets one retry in _send_one after
+# backing off by Postiz's own Retry-After value, since that failure is
+# caused by our own pace rather than anything wrong with the post itself.
+
+
+def _send_one(db: Session, content_item: ContentItem, slot: datetime | None) -> None:
+    try:
+        send_postiz_content_item(db, content_item, schedule_at=slot)
+    except PostizSendError as exc:
+        if exc.retry_after is None:
+            raise
+        wait = exc.retry_after + 5
+        logger.info("Postiz rate-limited - backing off %.0fs before retrying %s", wait, content_item.id)
+        time.sleep(wait)
+        send_postiz_content_item(db, content_item, schedule_at=slot)
 
 
 def _run_auto_schedule(pairs: list[tuple[str, datetime]]) -> None:
@@ -900,7 +913,7 @@ def _run_auto_schedule(pairs: list[tuple[str, datetime]]) -> None:
             content_item.last_error = None
             db.commit()
             try:
-                send_postiz_content_item(db, content_item, schedule_at=slot)
+                _send_one(db, content_item, slot)
             except Exception as exc:
                 logger.exception("Auto-schedule send failed for %s", content_item_id)
                 content_item.last_error = str(exc)[:2000]
