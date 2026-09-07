@@ -235,4 +235,4 @@ Note: `backend/app/db/migrations/env.py` excludes LangGraph's own `checkpoint*` 
 
 Brand kit (`/brand-kit`) is identity/handles for the poster's bottom strip (and, once built, a reel end-card) - not a color scheme; the AI-generated background (or neutral gradient fallback) carries the visual look instead.
 
-See the approved plan for Phase 4 (Postiz/Social Manager) - not built yet.
+- **Postiz publishing**: manual and bulk-scheduled sends to any number of Postiz-connected channels per brand, mirroring the WhatsApp/Botsab integration's brand-override-with-shared-fallback pattern (see WhatsApp section above) - see git history for the full design.
