@@ -52,6 +52,24 @@ def _latest_media_asset(db: Session, content_item_id) -> MediaAsset | None:
     )
 
 
+def _latest_carousel_slides(db: Session, content_item_id) -> list[MediaAsset]:
+    """All slide_index positions for the item's most recent carousel
+    generation - a regenerate inserts a fresh full set of "carousel_slide"
+    rows (see carousel_editor/graph.py), so this takes the newest asset per
+    slide_index rather than every row ever generated, same grouping
+    routes_board.py's board() view uses for the media gallery."""
+    assets = (
+        db.query(MediaAsset)
+        .filter(MediaAsset.content_item_id == content_item_id, MediaAsset.asset_type == "carousel_slide")
+        .order_by(MediaAsset.created_at.desc())
+        .all()
+    )
+    by_index: dict[int, MediaAsset] = {}
+    for asset in assets:
+        by_index.setdefault(asset.slide_index, asset)
+    return [by_index[i] for i in sorted(by_index)]
+
+
 def send_content_item(db: Session, content_item: ContentItem) -> dict:
     brand_kit = db.get(BrandKit, content_item.brand_kit_id)
     client = get_botsab_client(brand_kit)
@@ -65,6 +83,32 @@ def send_content_item(db: Session, content_item: ContentItem) -> dict:
         raise WhatsAppSendError("Set a WhatsApp recipient on the Brand Kit page first.")
 
     caption = _build_caption(content_item)
+    storage = get_storage_backend()
+
+    # Botsab's API has no multi-image/album send at all (confirmed reading
+    # its own source, see client.py's module docstring) - a carousel is
+    # sent as a plain sequence of separate image messages instead, each its
+    # own send_image_bytes call. The full caption goes on the first slide
+    # only (mirroring how a native album attaches one caption to the whole
+    # set); later slides go captionless rather than repeating it N times.
+    if content_item.format == "carousel":
+        slides = _latest_carousel_slides(db, content_item.id)
+        if not slides:
+            if not caption:
+                raise WhatsAppSendError("Nothing to send - no caption or media on this post.")
+            return client.send_text(recipient, caption)
+        try:
+            last_result: dict = {}
+            for i, slide in enumerate(slides):
+                file_bytes = storage.load(slide.storage_uri)
+                mimetype = mimetypes.guess_type(slide.storage_uri)[0] or "image/png"
+                last_result = client.send_image_bytes(
+                    recipient, file_bytes, slide.storage_uri, mimetype, caption=caption if i == 0 else ""
+                )
+            return last_result
+        except BotsabError as exc:
+            raise WhatsAppSendError(str(exc)) from exc
+
     asset = _latest_media_asset(db, content_item.id)
 
     try:
@@ -73,7 +117,6 @@ def send_content_item(db: Session, content_item: ContentItem) -> dict:
                 raise WhatsAppSendError("Nothing to send - no caption or media on this post.")
             return client.send_text(recipient, caption)
 
-        storage = get_storage_backend()
         file_bytes = storage.load(asset.storage_uri)
         default_mimetype = "image/png" if asset.asset_type == "poster" else "video/mp4"
         mimetype = mimetypes.guess_type(asset.storage_uri)[0] or default_mimetype

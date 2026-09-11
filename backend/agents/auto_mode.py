@@ -29,7 +29,7 @@ _AUTO_SEND_KEY = "auto_mode_auto_send"
 
 DEFAULT_MIN_SCORE = 0.8
 DEFAULT_FORMAT = "poster"
-VALID_FORMATS = ("poster", "reel", "text_only")
+VALID_FORMATS = ("poster", "reel", "carousel", "text_only")
 
 
 @dataclass

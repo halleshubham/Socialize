@@ -20,7 +20,7 @@ Socialize watches your Gmail inbox, finds newsletter articles worth posting abou
 
 | | |
 |---|---|
-| **Kanban board** — one card per article, from raw email to published post | **Review gate** — every draft, brief, and image is a decision point |
+| **Kanban board** — one card per post, from source (a newsletter or a GitHub repo) to published | **Review gate** — every draft, brief, and image is a decision point |
 | ![Board](docs/screenshots/board.png) | ![Review](docs/screenshots/card_modal.png) |
 | **Generated poster** — AI background, on-brand typography, source attribution | **Bulk auto-scheduling to Postiz** — spread a queue of approved posts across a date range |
 | ![Poster](docs/screenshots/poster_modal.png) | ![Auto-schedule](docs/screenshots/auto_schedule.png) |

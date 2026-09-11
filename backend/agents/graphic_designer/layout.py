@@ -1,24 +1,23 @@
-"""Two rendering paths:
+"""Pillow/deterministic code never draws poster CONTENT text (headline,
+quote, stat, etc.) - that's either AI-generated (the image model bakes the
+headline into the image itself, verbatim per the prompt) or not shown at
+all (no provider configured, or the generation call failed). The only
+things this module ever stamps on are branding (name + logo,
+add_brand_strip) and source attribution (add_source_line) - both
+independently optional per BrandKit toggles, since they're factual data
+that must render exactly as saved regardless of what the image model did.
 
-- render_fallback_poster: Pillow draws the headline itself (over an
-  AI-generated background if one's provided, else a neutral gradient).
-  Used when (a) no image-gen provider is configured, (b) a generation call
-  fails, or (c) the headline contains Devanagari (Hindi/Marathi) - verified
-  live that Gemini's image model cannot reliably render Devanagari as pixels
-  (garbled conjuncts/matras), so for those two languages Pillow draws the
-  text (via a real Devanagari font, see fonts.py) instead of asking the
-  image model to.
-- add_brand_strip: stamps just the bottom brand strip onto an image that
-  already has its headline baked in by the image model (English only - see
-  above) - the brand name/handles/website are factual data that must render
-  exactly as saved, so that part stays deterministic either way.
+- render_fallback_poster: background (AI-generated if one was produced,
+  else a neutral gradient) + brand strip. No headline.
+- add_brand_strip: the bottom brand strip - name/logo/handles/website.
+- add_source_line: a small "Source: X" line, applied last regardless of
+  which path produced the image.
 """
 
 import io
-import textwrap
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from backend.agents.graphic_designer.fonts import load_font
 
@@ -56,20 +55,6 @@ def _neutral_gradient() -> Image.Image:
     return Image.composite(bottom, base, mask)
 
 
-def _fit_font(
-    draw: ImageDraw.ImageDraw, text_lines: list[str], max_width: int, font_key: str, start_size: int
-) -> ImageFont.FreeTypeFont:
-    sample_text = "\n".join(text_lines)
-    size = start_size
-    while size > 24:
-        font = load_font(font_key, size, text=sample_text)
-        widest = max(draw.textlength(line, font=font) for line in text_lines)
-        if widest <= max_width:
-            return font
-        size -= 4
-    return load_font(font_key, 24, text=sample_text)
-
-
 def _strip_segments(brand_name: str, social_handles: dict, website_url: str | None) -> list[tuple]:
     """Each segment is either ("text", string) for the brand name, or
     ("icon", icon_font_kind, icon_char, label_string) for a handle/website -
@@ -98,12 +83,31 @@ def add_brand_strip(
     social_handles: dict | None = None,
     website_url: str | None = None,
     logo_bytes: bytes | None = None,
+    show_brand_name: bool = True,
 ) -> bytes:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((WIDTH, HEIGHT))
-    draw = ImageDraw.Draw(img, "RGBA")
 
     margin = 50
-    draw.rectangle([(0, HEIGHT - STRIP_HEIGHT), (WIDTH, HEIGHT)], fill=(0, 0, 0, 200))
+    strip_top_left = (0, HEIGHT - STRIP_HEIGHT)
+    strip_bottom_right = (WIDTH, HEIGHT)
+    # Frosted-glass strip: blur + darken the actual art already in this
+    # region, instead of stamping a flat opaque rectangle over it - reads as
+    # a designed panel integrated with the poster rather than a sticker over
+    # a finished image, while a light dark veil on top keeps the text drawn
+    # afterward just as legible as the old solid-black bar. Falls back to
+    # that flat-black rectangle if the blur step raises for any reason (a
+    # degenerate crop on a tiny/malformed source image).
+    try:
+        strip_region = img.crop((*strip_top_left, *strip_bottom_right)).filter(ImageFilter.GaussianBlur(radius=18))
+        strip_region = Image.blend(strip_region, Image.new("RGB", strip_region.size, (0, 0, 0)), alpha=0.4)
+        img.paste(strip_region, strip_top_left)
+        ImageDraw.Draw(img, "RGBA").rectangle(
+            [strip_top_left, strip_bottom_right], fill=(0, 0, 0, 70)
+        )
+    except Exception:
+        ImageDraw.Draw(img, "RGBA").rectangle([strip_top_left, strip_bottom_right], fill=(0, 0, 0, 200))
+
+    draw = ImageDraw.Draw(img, "RGBA")
     mid_y = HEIGHT - STRIP_HEIGHT / 2
 
     # Logo, if any, pasted at the strip's left edge, vertically centered -
@@ -121,7 +125,10 @@ def add_brand_strip(
         except Exception:
             logo_img = None
 
-    segments = _strip_segments(brand_name, social_handles or {}, website_url)
+    # Logo and name are independently optional (brand-level toggles, see
+    # BrandKit.show_logo_on_posters/show_brand_name_on_posters) - no longer
+    # mutually exclusive.
+    segments = _strip_segments(brand_name if show_brand_name else "", social_handles or {}, website_url)
     if segments:
         gap = 22  # between segments
         icon_gap = 10  # between an icon and its own label
@@ -212,36 +219,30 @@ def add_source_line(image_bytes: bytes, font_key: str, source_name: str | None) 
 
 
 def render_fallback_poster(
-    headline: str,
     font_key: str = "inter",
     brand_name: str = "",
     social_handles: dict | None = None,
     website_url: str | None = None,
     background_bytes: bytes | None = None,
     logo_bytes: bytes | None = None,
+    show_brand_name: bool = True,
 ) -> bytes:
+    """No headline/content text - used whenever there's no AI-generated
+    image with the headline already baked in (no provider configured, or
+    the generation call failed). Pillow only ever stamps branding (name +
+    logo) here; content text is either AI-drawn or not shown at all - see
+    docs/architecture.md's "no programmatic content text" policy."""
     if background_bytes:
-        img = Image.open(io.BytesIO(background_bytes)).convert("RGB").resize((WIDTH, HEIGHT))
+        # Crop-to-fill, not stretch - fine for an AI background generated
+        # at exactly (WIDTH, HEIGHT), but a real photo (product photos,
+        # any other non-square source) has its own aspect ratio and would
+        # visibly distort with a naive resize.
+        img = ImageOps.fit(Image.open(io.BytesIO(background_bytes)).convert("RGB"), (WIDTH, HEIGHT))
     else:
         img = _neutral_gradient()
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    margin = 70
-    wrapped = textwrap.wrap(headline.strip(), width=22) or [""]
-    font = _fit_font(draw, wrapped, WIDTH - 2 * margin, font_key, start_size=72)
-    line_height = int(font.size * 1.25)
-    text_block_height = line_height * len(wrapped)
-    panel_top = HEIGHT // 2 - text_block_height // 2 - 40
-    panel_bottom = HEIGHT // 2 + text_block_height // 2 + 40
-    draw.rectangle([(0, panel_top), (WIDTH, panel_bottom)], fill=(0, 0, 0, 120))
-
-    y = HEIGHT // 2 - text_block_height // 2
-    for line in wrapped:
-        line_width = draw.textlength(line, font=font)
-        x = (WIDTH - line_width) / 2
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += line_height
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return add_brand_strip(buf.getvalue(), font_key, brand_name, social_handles, website_url, logo_bytes)
+    return add_brand_strip(
+        buf.getvalue(), font_key, brand_name, social_handles, website_url, logo_bytes, show_brand_name
+    )

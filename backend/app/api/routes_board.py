@@ -2,22 +2,38 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.agents.auto_mode import DEFAULT_FORMAT, DEFAULT_MIN_SCORE, get_auto_mode_settings, set_auto_mode_settings
+from backend.agents.auto_mode import (
+    DEFAULT_FORMAT,
+    DEFAULT_MIN_SCORE,
+    VALID_FORMATS,
+    get_auto_mode_settings,
+    set_auto_mode_settings,
+)
+from backend.agents.carousel_editor.graph import generate_carousel
 from backend.agents.content_writer.graph import write_copy, write_format_fields
 from backend.agents.graphic_designer.graph import generate_poster
 from backend.agents.graphic_designer.templates import TEMPLATE_CHOICES
 from backend.agents.languages import DEFAULT_LANGUAGE, LANGUAGE_CHOICES
 from backend.agents.orchestrator import (
+    _prebuild_shotlist_for_review,
     auto_advance_content_item,
+    create_content_items,
+    park_at_media_review,
     resume_content_item,
+    rewind_to_content_review,
+    rewind_to_needs_review,
+    send_to_content_review,
     sync_format_to_graph_state,
 )
+from backend.agents.researcher.github_angles import extract_angles as extract_github_angles
+from backend.agents.researcher.product_angles import extract_angles as extract_product_angles
 from backend.agents.reel_editor.graph import (
     generate_reel,
     get_cost_cap,
@@ -29,19 +45,25 @@ from backend.agents.reel_editor.templates import TEMPLATE_CHOICES as REEL_TEMPLA
 from backend.agents.state import Format, Stage
 from backend.app.auth.brand_deps import get_accessible_brands, get_active_brand
 from backend.app.auth.deps import get_current_user
-from backend.app.db.models import BrandKit, ContentItem, IngestedEmail, LlmCallLog, MediaAsset, PostizPost, User
+from backend.app.db.models import BrandKit, ContentItem, IngestedEmail, LlmCallLog, MediaAsset, PostizPost, SyncState, User
 from backend.app.db.session import SessionLocal, get_db
 from backend.app.integrations.botsab.send import WhatsAppSendError, send_content_item
+from backend.app.integrations.github.client import GithubError
+from backend.app.integrations.github.source import fetch_grounding_text, get_github_client
 from backend.app.integrations.gmail.fetch import get_last_fetch_epoch, get_search_query, set_last_fetch_epoch, set_search_query
 from backend.app.integrations.gmail.oauth import GmailNotConnected
 from backend.app.integrations.postiz.auto_schedule import build_schedule_slots
 from backend.app.integrations.postiz.client import PostizError
 from backend.app.integrations.postiz.send import PostizSendError, get_postiz_client
 from backend.app.integrations.postiz.send import send_content_item as send_postiz_content_item
+from backend.app.integrations.woocommerce.source import build_grounding_text, list_brand_products, primary_image_url
+from backend.app.llm.image_provider import IMAGE_MODEL_LABELS, get_image_model_key, set_image_model_key
 from backend.app.llm.video_provider import VIDEO_MODEL_CHOICES
 from backend.app.storage.local_disk import get_storage_backend
 from backend.app.worker.background import run_in_background
+from backend.app.worker.cleanup import get_retention_days, set_retention_days
 from backend.app.worker.pipeline import fetch_pending_email_ids, process_pending_emails
+from backend.app.worker.rss_pipeline import run_rss_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +194,29 @@ def show_board(
                 asset.content_item_id, (storage.url_for(asset.storage_uri), asset.asset_type)
             )
 
+    # Carousel items hold N "carousel_slide" MediaAsset rows instead of one -
+    # the poster/reel query above's "newest matching asset_type" logic
+    # doesn't fit a multi-asset format, so this groups by slide_index
+    # instead, taking the newest asset per (item, slide_index) pair (a
+    # regenerate inserts a fresh full set of rows, all newer than whatever
+    # came before). media_by_item_id's value becomes (list_of_urls,
+    # "carousel") for these items - board.html's media_preview macro
+    # branches on that shape.
+    carousel_item_ids = [i for i in item_ids if format_by_item_id.get(i) == "carousel"]
+    if carousel_item_ids:
+        slide_assets = (
+            db.query(MediaAsset)
+            .filter(MediaAsset.content_item_id.in_(carousel_item_ids), MediaAsset.asset_type == "carousel_slide")
+            .order_by(MediaAsset.created_at.desc())
+            .all()
+        )
+        slides_by_item: dict = {}
+        for asset in slide_assets:
+            slides_by_item.setdefault(asset.content_item_id, {}).setdefault(asset.slide_index, asset)
+        for content_item_id, idx_map in slides_by_item.items():
+            urls = [storage.url_for(idx_map[idx].storage_uri) for idx in sorted(idx_map.keys())]
+            media_by_item_id[content_item_id] = (urls, "carousel")
+
     # Transparency panel: every email actually fetched/looked at, whether or
     # not it produced any cards - answers "which mails have been traced".
     recent_emails = (
@@ -220,8 +265,11 @@ def show_board(
             "search_presets": SEARCH_QUERY_PRESETS,
             "gmail_last_fetch_at": datetime.fromtimestamp(get_last_fetch_epoch(db, brand.id), tz=timezone.utc),
             "reel_cost_cap": get_cost_cap(db, brand.id),
+            "discard_retention_days": get_retention_days(db, brand.id),
             "reel_video_model_key": get_video_model_key(db, brand.id),
             "video_model_choices": VIDEO_MODEL_CHOICES,
+            "image_model_key": get_image_model_key(db, brand.id),
+            "image_model_labels": IMAGE_MODEL_LABELS,
             "auto_mode": get_auto_mode_settings(db, brand.id),
             "language_choices": LANGUAGE_CHOICES,
             "default_language": brand.default_language or DEFAULT_LANGUAGE,
@@ -233,6 +281,7 @@ def show_board(
             "error": error,
             "fetched": fetched,
             "pending": pending,
+            "website_products": list_brand_products(brand) if brand.product_catalog_url else [],
             "active_nav": "board",
         },
     )
@@ -264,6 +313,18 @@ def fetch_now(
     return _fetch_and_redirect(brand.id)
 
 
+@router.post("/fetch-rss")
+def fetch_rss_now(
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """RSS sibling of fetch_now - unlike Gmail there's no "not connected"
+    setup error worth blocking on (a dead/malformed feed just gets skipped,
+    logged, per feed), so the whole fetch+triage backgrounds in one call."""
+    run_in_background(run_rss_fetch, brand.id)
+    return RedirectResponse(url="/board?error=Fetching RSS feeds in the background", status_code=303)
+
+
 @router.post("/gmail-refetch-since")
 def refetch_since(
     since_date: str = Form(...),
@@ -285,6 +346,172 @@ def refetch_since(
         return RedirectResponse(url="/board?error=Invalid date", status_code=303)
     set_last_fetch_epoch(db, brand.id, int(since.timestamp()))
     return _fetch_and_redirect(brand.id)
+
+
+def _run_github_draft(
+    brand_kit_id, repo_full_name: str, repo_url: str, grounding_text: str, feature_description: str, extra_context: str
+) -> None:
+    db = SessionLocal()
+    try:
+        angles = extract_github_angles(
+            db, brand_kit_id, repo_full_name, repo_url, grounding_text, feature_description, extra_context
+        )
+    finally:
+        db.close()
+
+    for angle in angles:
+        angle["full_text"] = grounding_text
+    create_content_items(SessionLocal, brand_kit_id, angles, source_email_id=None)
+
+
+@router.post("/draft-github-posts")
+def draft_github_posts(
+    repo_full_name: str = Form(...),
+    feature_description: str = Form(...),
+    extra_context: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """The GitHub-source sibling of "Fetch now" - instead of an inbox,
+    grounds drafts in a real repo's README/docs/commit history plus what
+    the user says they just built (see integrations/github/source.py,
+    researcher/github_angles.py). Mirrors _fetch_and_redirect's split: the
+    GitHub API calls (fetch_grounding_text) are fast and worth blocking on
+    (a bad token/permissions - the kind of setup error the user needs to
+    see immediately - would otherwise fail silently in a background thread
+    with no way to surface it, since there's no ContentItem yet to attach
+    a last_error to); only the LLM angle-extraction call backgrounds."""
+    if not any(r["full_name"] == repo_full_name for r in brand.github_repos):
+        return RedirectResponse(url="/board?error=Pick a repo configured on the Brand Kit page", status_code=303)
+
+    client = get_github_client(brand)
+    try:
+        grounding_text = fetch_grounding_text(client, repo_full_name)
+    except GithubError as exc:
+        return RedirectResponse(url=f"/board?error=GitHub error: {exc}", status_code=303)
+    if not grounding_text.strip():
+        return RedirectResponse(
+            url="/board?error=No README/docs/commits found for that repo - nothing to draft from",
+            status_code=303,
+        )
+
+    repo_url = f"https://github.com/{repo_full_name}"
+    run_in_background(
+        _run_github_draft, brand.id, repo_full_name, repo_url, grounding_text, feature_description, extra_context
+    )
+    return RedirectResponse(url="/board?error=Drafting posts from GitHub in the background", status_code=303)
+
+
+def _run_website_draft(
+    brand_kit_id,
+    product_name: str,
+    product_url: str,
+    grounding_text: str,
+    image_url: str | None,
+    extra_context: str,
+    format_override: str | None = None,
+    language_override: str | None = None,
+) -> None:
+    db = SessionLocal()
+    try:
+        angles = extract_product_angles(db, brand_kit_id, product_name, product_url, grounding_text, extra_context)
+    finally:
+        db.close()
+
+    for angle in angles:
+        angle["full_text"] = grounding_text
+    started_ids = create_content_items(
+        SessionLocal,
+        brand_kit_id,
+        angles,
+        source_email_id=None,
+        format_override=format_override,
+        language_override=language_override,
+    )
+
+    if not image_url or not started_ids:
+        return
+    try:
+        response = httpx.get(image_url, timeout=30)
+        response.raise_for_status()
+        image_bytes = response.content
+    except Exception:
+        logger.exception("Could not download product photo from %s", image_url)
+        return
+
+    # One MediaAsset(asset_type="product_photo") per created item - the
+    # hook generate_poster/generate_reel check for to use the real photo
+    # instead of generating anything (see graphic_designer/graph.py,
+    # reel_editor/graph.py).
+    storage = get_storage_backend()
+    db = SessionLocal()
+    try:
+        for content_item_id in started_ids:
+            storage_uri = storage.save(image_bytes, f"{content_item_id}-product.jpg")
+            db.add(
+                MediaAsset(
+                    content_item_id=content_item_id,
+                    asset_type="product_photo",
+                    storage_uri=storage_uri,
+                    cost_usd=0.0,
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.post("/draft-from-website")
+def draft_from_website(
+    product_id: str = Form(...),
+    extra_context: str = Form(""),
+    format: str = Form(""),
+    language: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """The product-catalog sibling of draft_github_posts - grounds drafts
+    in a real product's own listing (name/category/price/description) from
+    the brand's WooCommerce store (see integrations/woocommerce/,
+    researcher/product_angles.py). Live-fetches the product list and
+    matches by id rather than trusting a client-supplied product blob -
+    same fast-fail-before-backgrounding split as draft_github_posts (a bad
+    catalog URL surfaces immediately, not silently in a background
+    thread).
+
+    format/language are optional per-batch overrides ("" means "use the
+    brand's own default") - the only way to get a reel or non-default
+    language out of this route for a combined_drafting brand, since that
+    skips the per-item review step where format/language are normally
+    chosen (see orchestrator.py's create_content_items/_analytical_node)."""
+    format_override = format if format in VALID_FORMATS else None
+    language_override = language if language in LANGUAGE_CHOICES else None
+    products = list_brand_products(brand)
+    product = next((p for p in products if str(p.get("id")) == product_id), None)
+    if not product:
+        return RedirectResponse(
+            url="/board?error=Couldn't find that product - check the catalog URL on the Brand Kit page",
+            status_code=303,
+        )
+
+    grounding_text = build_grounding_text(product)
+    if not grounding_text.strip():
+        return RedirectResponse(url="/board?error=No description found for that product", status_code=303)
+
+    run_in_background(
+        _run_website_draft,
+        brand.id,
+        product.get("name", ""),
+        product.get("permalink", ""),
+        grounding_text,
+        primary_image_url(product),
+        extra_context,
+        format_override,
+        language_override,
+    )
+    return RedirectResponse(url="/board?error=Drafting posts from the catalog in the background", status_code=303)
 
 
 @router.post("/search-query")
@@ -355,7 +582,7 @@ def _decide_enters_slow_node(content_item: ContentItem, decision: str) -> bool:
         return decision == "send_to_content_writer"
     if content_item.stage == Stage.DRAFTED:
         if decision == "approve":
-            return content_item.format in (Format.POSTER, Format.REEL)
+            return content_item.format in (Format.POSTER, Format.REEL, Format.CAROUSEL)
         return decision == "regenerate"
     if content_item.stage == Stage.MEDIA_GENERATED:
         return decision == "regenerate"
@@ -372,6 +599,36 @@ def _resume_in_background(content_item_id: str, payload: dict) -> None:
         # stale, pre-resume field values (see approve_and_generate_media's
         # docstring for the same SQLAlchemy identity-map gotcha).
         db.expire_all()
+
+    _run_with_processing_state(content_item_id, _work)
+
+
+def _send_to_content_review_in_background(content_item_id: str, format_: str, language: str) -> None:
+    def _work(db: Session, content_item: ContentItem) -> None:
+        ok = send_to_content_review(content_item_id, format_, language or None)
+        db.expire_all()
+        if not ok:
+            raise RuntimeError("Could not move this card to Content Review")
+
+    _run_with_processing_state(content_item_id, _work)
+
+
+def _rewind_to_content_review_in_background(content_item_id: str) -> None:
+    def _work(db: Session, content_item: ContentItem) -> None:
+        ok = rewind_to_content_review(content_item_id)
+        db.expire_all()
+        if not ok:
+            raise RuntimeError("Could not move this card back to Content Review")
+
+    _run_with_processing_state(content_item_id, _work)
+
+
+def _rewind_to_needs_review_in_background(content_item_id: str) -> None:
+    def _work(db: Session, content_item: ContentItem) -> None:
+        ok = rewind_to_needs_review(content_item_id)
+        db.expire_all()
+        if not ok:
+            raise RuntimeError("Could not move this card back to Needs Review")
 
     _run_with_processing_state(content_item_id, _work)
 
@@ -490,6 +747,43 @@ def approve_all(
     return RedirectResponse(url="/board", status_code=303)
 
 
+@router.post("/discard-all")
+def discard_all(
+    stage: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """Discard's bulk equivalent of approve_all - same column scope
+    (analyzed/drafted/media_generated, wherever Approve all appears), same
+    per-item resolve-the-pending-interrupt approach via
+    resume_content_item(decision="discard"). Always synchronous - discard
+    never enters a slow node (_decide_enters_slow_node), so there's no
+    background dispatch to mirror here, unlike approve_all."""
+    target_stage = _APPROVE_ALL_STAGES.get(stage)
+    if not target_stage:
+        return RedirectResponse(url="/board?error=Invalid stage", status_code=303)
+
+    item_ids = [
+        str(row.id)
+        for row in db.query(ContentItem.id)
+        .filter(ContentItem.brand_kit_id == brand.id, ContentItem.stage == target_stage)
+        .all()
+    ]
+
+    for content_item_id in item_ids:
+        db2 = SessionLocal()
+        try:
+            content_item = db2.get(ContentItem, content_item_id)
+            if not content_item or content_item.stage != target_stage:
+                continue
+        finally:
+            db2.close()
+        resume_content_item(content_item_id, {"decision": "discard", "feedback": ""})
+
+    return RedirectResponse(url="/board", status_code=303)
+
+
 @router.post("/{content_item_id}/retry-content-writer")
 def retry_content_writer(
     content_item_id: str,
@@ -505,6 +799,7 @@ def retry_content_writer(
 
     def _work(db: Session, content_item: ContentItem) -> None:
         write_copy(db, content_item, revision_feedback=content_item.user_feedback)
+        _prebuild_shotlist_for_review(db, content_item)
         content_item.stage = Stage.DRAFTED
         content_item.user_feedback = None
 
@@ -553,6 +848,25 @@ def retry_reel(
     return RedirectResponse(url="/board", status_code=303)
 
 
+@router.post("/{content_item_id}/retry-carousel")
+def retry_carousel(
+    content_item_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Carousel equivalent of retry_reel/retry_poster above - same "graph
+    checkpoint isn't resumable after a mid-node failure" reasoning."""
+    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+        return RedirectResponse(url="/board", status_code=303)
+
+    def _work(db: Session, content_item: ContentItem) -> None:
+        generate_carousel(db, content_item)
+        content_item.stage = Stage.MEDIA_GENERATED
+
+    run_in_background(_run_with_processing_state, content_item_id, _work)
+    return RedirectResponse(url="/board", status_code=303)
+
+
 def _generate_media_work(target_format: str):
     """Shared by generate_media and approve_and_generate_media below -
     derives the new format's field(s) via write_format_fields if not already
@@ -564,13 +878,80 @@ def _generate_media_work(target_format: str):
             if not item.poster_headline:
                 write_format_fields(db, item, "poster")
             generate_poster(db, item)
+        elif target_format == "carousel":
+            if not item.carousel_script:
+                write_format_fields(db, item, "carousel")
+            generate_carousel(db, item)
         else:
             if not item.reel_script:
                 write_format_fields(db, item, "reel")
             generate_reel(db, item)
         item.stage = Stage.MEDIA_GENERATED
+        db.commit()
+        park_at_media_review(item.id, target_format, item.brand_kit_id, item.source_email_id)
 
     return _work
+
+
+@router.post("/{content_item_id}/write-copy")
+def write_copy_manually(
+    content_item_id: str,
+    copy_text: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Sets or updates copy_text on an Approved item - either a "write
+    myself" item with none yet, or editing already-approved copy."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.APPROVED:
+        return RedirectResponse(url="/board?error=Item not found or not approved", status_code=303)
+    content_item.copy_text = copy_text.strip()
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/send-to-content-review")
+def send_to_content_review_route(
+    content_item_id: str,
+    format: str = Form(...),
+    language: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fast-forwards a Researched/Analyzed card into Content Review - see
+    orchestrator.py's send_to_content_review."""
+    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+        return RedirectResponse(url="/board", status_code=303)
+    run_in_background(_send_to_content_review_in_background, content_item_id, format, language)
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/rewind-to-content-review")
+def rewind_to_content_review_route(
+    content_item_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Sends a Media Generated/Approved card back to Content Review - see
+    orchestrator.py's rewind_to_content_review."""
+    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+        return RedirectResponse(url="/board", status_code=303)
+    run_in_background(_rewind_to_content_review_in_background, content_item_id)
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/rewind-to-needs-review")
+def rewind_to_needs_review_route(
+    content_item_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Sends a Content Review/Media Review/Approved card back to Needs
+    Review - see orchestrator.py's rewind_to_needs_review."""
+    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+        return RedirectResponse(url="/board", status_code=303)
+    run_in_background(_rewind_to_needs_review_in_background, content_item_id)
+    return RedirectResponse(url="/board", status_code=303)
 
 
 @router.post("/{content_item_id}/generate-media")
@@ -587,7 +968,7 @@ def generate_media(
     into. Only valid once a post is actually Approved (stage=APPROVED) - see
     approve_and_generate_media for the drafted/Content-Review-column
     equivalent, which resumes the graph properly first."""
-    if target_format not in ("poster", "reel"):
+    if target_format not in ("poster", "reel", "carousel"):
         return RedirectResponse(url="/board?error=Invalid format", status_code=303)
 
     content_item = _accessible_content_item(db, user, content_item_id)
@@ -623,7 +1004,7 @@ def approve_and_generate_media(
     media generation the same way generate_media does. Synchronous
     resume_content_item call is safe here: for a text_only item, approving
     is just a stage flip with no LLM/media call in the graph itself."""
-    if target_format not in ("poster", "reel"):
+    if target_format not in ("poster", "reel", "carousel"):
         return RedirectResponse(url="/board?error=Invalid format", status_code=303)
 
     content_item = _accessible_content_item(db, user, content_item_id)
@@ -667,6 +1048,20 @@ def update_reel_cost_cap(
     return RedirectResponse(url="/board", status_code=303)
 
 
+@router.post("/discard-retention")
+def update_discard_retention(
+    retention_days: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """How long a discarded item sticks around before the daily cleanup job
+    (worker/cleanup.py) deletes it and its media for good - 0 opts a brand
+    out of cleanup entirely (nothing is ever old enough)."""
+    set_retention_days(db, brand.id, retention_days)
+    return RedirectResponse(url="/board", status_code=303)
+
+
 @router.post("/reel-video-model")
 def update_reel_video_model(
     model_key: str = Form(...),
@@ -675,10 +1070,28 @@ def update_reel_video_model(
     brand: BrandKit = Depends(get_active_brand),
 ):
     """Which Veo tier the next reel generation uses - see
-    llm/video_provider.py's VIDEO_MODEL_CHOICES ("lite", cheap default, vs
-    "standard", ~5x pricier). Applies to whichever reel gets generated next,
-    same "configure, then trigger" pattern as the reel cost cap."""
+    llm/video_provider.py's VIDEO_MODEL_CHOICES ("fast", the default, vs
+    "lite" for a cheaper/lower-quality opt-in or "standard" at ~5x "fast"'s
+    price). Applies to whichever reel gets generated next, same "configure,
+    then trigger" pattern as the reel cost cap."""
     set_video_model_key(db, brand.id, model_key)
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/poster-image-model")
+def update_poster_image_model(
+    model_key: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """Which image-gen model every image call this brand makes uses - see
+    llm/image_provider.py's IMAGE_MODEL_CHOICES. Covers posters (full-design,
+    product-photo-reference, legacy background) AND reel character
+    references, not just one of them. Applies to whichever image gets
+    generated next, same "configure, then trigger" pattern as the reel
+    video model/cost cap."""
+    set_image_model_key(db, brand.id, model_key)
     return RedirectResponse(url="/board", status_code=303)
 
 
@@ -781,6 +1194,140 @@ def update_reel_template(
     return RedirectResponse(url="/board", status_code=303)
 
 
+# Hindi/Marathi-only pre-generation text editing (routes below) - AI-drafted
+# Marathi/Hindi quality isn't reliable enough yet (user-reported), so for
+# these two languages the exact final text that ends up rendered/spoken is
+# made directly editable at Content Review, before Approve spends real
+# generation cost on it. See orchestrator.py's _prebuild_shotlist_for_review,
+# which builds reel_scenes/carousel_slides at drafting time (not lazily at
+# generation time, like every other language) specifically so there's
+# something here to edit. All three routes below share the same guard: only
+# a DRAFTED, hi/mr item is editable.
+_TEXT_REVIEW_LANGUAGES = ("hi", "mr")
+
+# poster_content's shape is template-specific (see content_writer/prompts.py's
+# POSTER_TEMPLATE_GUIDE) - these are the plain scalar fields per template;
+# "facts" (fact_critique) and "highlight_phrases" (trivia) are list fields,
+# handled separately below with a fixed max count matching the guide's own
+# "up to 3"/"up to 2" caps.
+_POSTER_CONTENT_SCALAR_FIELDS = {
+    "quote": ["quote_text", "attribution", "citation"],
+    "tribute": ["name", "achievement", "quote_text", "tribute_line"],
+    "narrative": ["body_text"],
+    "fact_critique": ["critique_line"],
+    "trivia": ["headline", "body_text"],
+    "event": ["event_title", "datetime", "location", "cta"],
+}
+_MAX_FACTS = 3
+_MAX_HIGHLIGHT_PHRASES = 2
+
+
+@router.post("/{content_item_id}/edit-poster-content")
+async def edit_poster_content(
+    content_item_id: str,
+    request: Request,
+    poster_headline: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Saves user-edited poster_headline/poster_content - a plain field
+    update, no LLM call, no stage change. board.html renders one form field
+    per _POSTER_CONTENT_SCALAR_FIELDS[item.poster_template] plus the
+    template's list fields (facts_stat_N/facts_source_N,
+    highlight_phrases_N) - read generically here via request.form() since
+    the field set varies by template."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.DRAFTED or content_item.language not in _TEXT_REVIEW_LANGUAGES:
+        return RedirectResponse(url="/board?error=Not editable", status_code=303)
+
+    form = await request.form()
+    template = content_item.poster_template
+    content = dict(content_item.poster_content or {})
+
+    for field in _POSTER_CONTENT_SCALAR_FIELDS.get(template, []):
+        if field in form:
+            content[field] = str(form.get(field, "")).strip()
+
+    if template == "fact_critique":
+        facts = []
+        for i in range(_MAX_FACTS):
+            stat = str(form.get(f"facts_stat_{i}", "")).strip()
+            source = str(form.get(f"facts_source_{i}", "")).strip()
+            if stat:
+                facts.append({"stat": stat, "source": source})
+        content["facts"] = facts
+
+    if template == "trivia":
+        phrases = [str(form.get(f"highlight_phrases_{i}", "")).strip() for i in range(_MAX_HIGHLIGHT_PHRASES)]
+        content["highlight_phrases"] = [p for p in phrases if p]
+
+    content_item.poster_content = content
+    content_item.poster_headline = poster_headline.strip()[:300]
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/edit-reel-scenes")
+async def edit_reel_scenes(
+    content_item_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Saves user-edited per-scene narration and music direction - the exact
+    text Veo will speak, and the plain-language music/mood direction folded
+    into its generation prompt (see reel_editor/graph.py). Each scene's
+    visual "description" is an English generation prompt regardless of the
+    post's language, not user-facing content text, so it stays read-only -
+    same for the deterministic "timeframe"/"text_on_visual" fields (see
+    reel_editor/prompts.py's docstring), which aren't user text at all."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.DRAFTED or content_item.language not in _TEXT_REVIEW_LANGUAGES:
+        return RedirectResponse(url="/board?error=Not editable", status_code=303)
+
+    form = await request.form()
+    scenes = [dict(scene) for scene in (content_item.reel_scenes or [])]
+    for i, scene in enumerate(scenes):
+        narration_key, music_key = f"narration_{i}", f"music_{i}"
+        if narration_key in form:
+            scene["narration"] = str(form.get(narration_key, "")).strip()
+        if music_key in form:
+            scene["music"] = str(form.get(music_key, "")).strip()
+    content_item.reel_scenes = scenes
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/edit-carousel-slides")
+async def edit_carousel_slides(
+    content_item_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Saves user-edited per-slide headline/body_text - the exact text the
+    image model will render onto each slide. Unlike the poster/reel edit
+    routes above, this is NOT restricted to hi/mr - carousel slide wording
+    often benefits from a human tweak regardless of language (user
+    request), and carousel_slides is now pre-built at drafting time for
+    every language (see orchestrator.py's _prebuild_shotlist_for_review)."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.DRAFTED:
+        return RedirectResponse(url="/board?error=Not editable", status_code=303)
+
+    form = await request.form()
+    slides = [dict(slide) for slide in (content_item.carousel_slides or [])]
+    for i, slide in enumerate(slides):
+        headline_key, body_key = f"headline_{i}", f"body_text_{i}"
+        if headline_key in form:
+            slide["headline"] = str(form.get(headline_key, "")).strip()
+        if body_key in form:
+            slide["body_text"] = str(form.get(body_key, "")).strip()
+    content_item.carousel_slides = slides
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
 @router.post("/{content_item_id}/send-whatsapp")
 def send_whatsapp(
     content_item_id: str,
@@ -823,8 +1370,16 @@ def send_postiz(
     submitting, since a naive value here would otherwise be misread by
     Postiz as already being UTC. Backgrounded for the same reason
     send_whatsapp is - outbound HTTP to a third-party server, real
-    upload+multi-channel POST latency."""
-    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+    upload+multi-channel POST latency.
+
+    A schedule_at that's present but fails to parse is a hard error, not a
+    silent fall-through to "send now" - found live: a reschedule attempt
+    landed with schedule_at empty/unparseable server-side (exact client
+    cause unconfirmed) and got silently published immediately instead of
+    at the intended time, which is a much worse failure mode than just
+    rejecting the request. Parsed before _start_processing so a bad value
+    redirects cleanly instead of leaving the card stuck "processing"."""
+    if not _accessible_content_item(db, user, content_item_id):
         return RedirectResponse(url="/board?error=Not found", status_code=303)
 
     parsed_schedule = None
@@ -832,7 +1387,17 @@ def send_postiz(
         try:
             parsed_schedule = datetime.fromisoformat(schedule_at)
         except ValueError:
-            pass
+            logger.warning(
+                "send-postiz got an unparseable schedule_at %r for %s - refusing rather than sending now",
+                schedule_at, content_item_id,
+            )
+            return RedirectResponse(
+                url="/board?error=Couldn't read that schedule time - please pick it again and retry",
+                status_code=303,
+            )
+
+    if not _start_processing(content_item_id):
+        return RedirectResponse(url="/board?error=Not found", status_code=303)
 
     def _work(db: Session, content_item: ContentItem) -> None:
         try:
@@ -902,28 +1467,108 @@ def _send_one(db: Session, content_item: ContentItem, slot: datetime | None) -> 
         send_postiz_content_item(db, content_item, schedule_at=slot)
 
 
-def _run_auto_schedule(pairs: list[tuple[str, datetime]]) -> None:
-    for i, (content_item_id, slot) in enumerate(pairs):
-        db = SessionLocal()
+def _resolve_schedule_range(
+    range_preset: str, start_date: str, end_date: str, posts_per_day: int, day_start_hour: float, day_end_hour: float
+) -> tuple:
+    """Shared date-range/pacing parsing for auto_schedule and
+    reschedule_all - returns (start, end, posts_per_day, day_start_hour,
+    day_end_hour) or raises ValueError with a user-facing message."""
+    today = datetime.now(timezone.utc).date()
+    if range_preset == "2weeks":
+        start, end = today, today + timedelta(days=13)
+    elif range_preset == "custom":
         try:
-            content_item = db.get(ContentItem, content_item_id)
-            if not content_item or content_item.stage != Stage.APPROVED:
-                continue
-            content_item.is_processing = True
-            content_item.last_error = None
+            start = date.fromisoformat(start_date)
+            end = date.fromisoformat(end_date)
+        except ValueError:
+            raise ValueError("Invalid date range")
+    else:
+        start, end = today, today + timedelta(days=6)
+    if end < start:
+        raise ValueError("End date is before start date")
+
+    posts_per_day = max(1, min(posts_per_day, 20))
+    day_start_hour = max(0.0, min(day_start_hour, 23.0))
+    day_end_hour = max(day_start_hour + 0.5, min(day_end_hour, 24.0))
+    return start, end, posts_per_day, day_start_hour, day_end_hour
+
+
+# Guards against two overlapping auto-schedule/reschedule-all background
+# jobs running for the same brand at once - found live: clicking
+# "Auto-schedule" more than once (each click's own redirect message is easy
+# to miss/not realize means "still working, 4 minutes per item, could take
+# over an hour" - so a second click looks like a reasonable retry) starts a
+# SECOND independent background loop with its own snapshot of "which items
+# still need scheduling", computed before the first loop has caught up -
+# both loops then genuinely scheduled the same items, producing duplicate
+# PostizPost rows (and duplicate real posts once they'd actually gone out).
+# A brand-scoped SyncState row acts as the lock: present and recent enough
+# means a job is (or was very recently) running. The staleness window
+# covers a hard process kill leaving the lock stuck forever with no
+# background thread left alive to ever clear it (background threads don't
+# survive a restart - see docs/architecture.md's "Backgrounded board
+# actions").
+_SCHEDULE_LOCK_KEY = "schedule_job_lock"
+_SCHEDULE_LOCK_STALE_SECONDS = 2 * 3600  # well past any realistic run (~20 items x 240s ~= 80min)
+
+
+def _schedule_job_already_running(db: Session, brand_id) -> bool:
+    row = db.get(SyncState, (_SCHEDULE_LOCK_KEY, brand_id))
+    if not row:
+        return False
+    try:
+        started_at = datetime.fromisoformat(row.value)
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - started_at).total_seconds() < _SCHEDULE_LOCK_STALE_SECONDS
+
+
+def _set_schedule_job_lock(db: Session, brand_id) -> None:
+    row = db.get(SyncState, (_SCHEDULE_LOCK_KEY, brand_id))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if row:
+        row.value = now_iso
+    else:
+        db.add(SyncState(key=_SCHEDULE_LOCK_KEY, brand_kit_id=brand_id, value=now_iso))
+    db.commit()
+
+
+def _clear_schedule_job_lock(brand_id) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(SyncState, (_SCHEDULE_LOCK_KEY, brand_id))
+        if row:
+            db.delete(row)
             db.commit()
+    finally:
+        db.close()
+
+
+def _run_auto_schedule(pairs: list[tuple[str, datetime]], brand_id) -> None:
+    try:
+        for i, (content_item_id, slot) in enumerate(pairs):
+            db = SessionLocal()
             try:
-                _send_one(db, content_item, slot)
-            except Exception as exc:
-                logger.exception("Auto-schedule send failed for %s", content_item_id)
-                content_item.last_error = str(exc)[:2000]
-            finally:
-                content_item.is_processing = False
+                content_item = db.get(ContentItem, content_item_id)
+                if not content_item or content_item.stage != Stage.APPROVED:
+                    continue
+                content_item.is_processing = True
+                content_item.last_error = None
                 db.commit()
-        finally:
-            db.close()
-        if i < len(pairs) - 1:
-            time.sleep(_AUTO_SCHEDULE_ITEM_DELAY_SECONDS)
+                try:
+                    _send_one(db, content_item, slot)
+                except Exception as exc:
+                    logger.exception("Auto-schedule send failed for %s", content_item_id)
+                    content_item.last_error = str(exc)[:2000]
+                finally:
+                    content_item.is_processing = False
+                    db.commit()
+            finally:
+                db.close()
+            if i < len(pairs) - 1:
+                time.sleep(_AUTO_SCHEDULE_ITEM_DELAY_SECONDS)
+    finally:
+        _clear_schedule_job_lock(brand_id)
 
 
 @router.post("/auto-schedule")
@@ -945,23 +1590,20 @@ def auto_schedule(
     job (see _run_auto_schedule) rather than one run_in_background task per
     item - items are spaced out to be gentle on Postiz's rate limit instead
     of firing the whole batch at once."""
-    today = datetime.now(timezone.utc).date()
-    if range_preset == "2weeks":
-        start, end = today, today + timedelta(days=13)
-    elif range_preset == "custom":
-        try:
-            start = date.fromisoformat(start_date)
-            end = date.fromisoformat(end_date)
-        except ValueError:
-            return RedirectResponse(url="/board?error=Invalid date range", status_code=303)
-    else:
-        start, end = today, today + timedelta(days=6)
-    if end < start:
-        return RedirectResponse(url="/board?error=End date is before start date", status_code=303)
+    try:
+        start, end, posts_per_day, day_start_hour, day_end_hour = _resolve_schedule_range(
+            range_preset, start_date, end_date, posts_per_day, day_start_hour, day_end_hour
+        )
+    except ValueError as exc:
+        return RedirectResponse(url=f"/board?error={exc}", status_code=303)
 
-    posts_per_day = max(1, min(posts_per_day, 20))
-    day_start_hour = max(0.0, min(day_start_hour, 23.0))
-    day_end_hour = max(day_start_hour + 0.5, min(day_end_hour, 24.0))
+    if _schedule_job_already_running(db, brand.id):
+        return RedirectResponse(
+            url="/board?error=Auto-schedule is already running for this brand - it paces "
+            f"~1 post every {_AUTO_SCHEDULE_ITEM_DELAY_SECONDS // 60} minutes, so a big batch can take a "
+            "while. Wait for it to finish (watch the Scheduled column) before starting another run.",
+            status_code=303,
+        )
 
     already_scheduled_ids = {
         row.content_item_id
@@ -984,9 +1626,116 @@ def auto_schedule(
         return RedirectResponse(url="/board?error=No time slots in that range", status_code=303)
 
     pairs = list(zip(item_ids, slots))
-    run_in_background(_run_auto_schedule, pairs)
+    _set_schedule_job_lock(db, brand.id)
+    run_in_background(_run_auto_schedule, pairs, brand.id)
     return RedirectResponse(
         url=f"/board?error=Scheduling {len(pairs)} post(s) in the background - watch the Scheduled column",
+        status_code=303,
+    )
+
+
+def _run_reschedule_all(pairs: list[tuple[str, datetime]], brand_id) -> None:
+    """Per item: cancel every existing Postiz post (best-effort delete on
+    Postiz's side, always removed locally so a dead/unreachable old post_id
+    can't block the resend), then send fresh at the new slot via _send_one -
+    same per-item pacing as _run_auto_schedule, since deletes count against
+    Postiz's rate limit too."""
+    try:
+        for i, (content_item_id, slot) in enumerate(pairs):
+            db = SessionLocal()
+            try:
+                content_item = db.get(ContentItem, content_item_id)
+                if not content_item:
+                    continue
+                content_item.is_processing = True
+                content_item.last_error = None
+                db.commit()
+                try:
+                    brand_kit = db.get(BrandKit, content_item.brand_kit_id)
+                    client = get_postiz_client(brand_kit)
+                    for post in db.query(PostizPost).filter(PostizPost.content_item_id == content_item.id).all():
+                        try:
+                            if client:
+                                client.delete_post(post.postiz_post_id)
+                        except PostizError:
+                            logger.warning(
+                                "Couldn't delete old Postiz post %s for %s - removing locally anyway",
+                                post.postiz_post_id, content_item_id,
+                            )
+                        db.delete(post)
+                    db.commit()
+                    _send_one(db, content_item, slot)
+                except Exception as exc:
+                    logger.exception("Reschedule-all failed for %s", content_item_id)
+                    content_item.last_error = str(exc)[:2000]
+                finally:
+                    content_item.is_processing = False
+                    db.commit()
+            finally:
+                db.close()
+            if i < len(pairs) - 1:
+                time.sleep(_AUTO_SCHEDULE_ITEM_DELAY_SECONDS)
+    finally:
+        _clear_schedule_job_lock(brand_id)
+
+
+@router.post("/reschedule-all")
+def reschedule_all(
+    range_preset: str = Form("week"),
+    start_date: str = Form(""),
+    end_date: str = Form(""),
+    posts_per_day: int = Form(1),
+    day_start_hour: float = Form(9.0),
+    day_end_hour: float = Form(21.0),
+    tz_offset_minutes: int = Form(0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """The "start over" sibling of auto_schedule - instead of picking up
+    unscheduled Approved items, this cancels every existing Postiz post for
+    this brand's currently-Scheduled items and re-sends them fresh across
+    the chosen range. Built for cleaning up a bad batch (e.g. the
+    schedule_at=NULL bug where a reschedule silently published immediately)
+    rather than a routine action. If there are more scheduled items than
+    slots in the chosen range, only the earliest-scheduled ones (up to the
+    slot count) are touched - widen the range or raise posts/day to cover
+    everything in one run."""
+    try:
+        start, end, posts_per_day, day_start_hour, day_end_hour = _resolve_schedule_range(
+            range_preset, start_date, end_date, posts_per_day, day_start_hour, day_end_hour
+        )
+    except ValueError as exc:
+        return RedirectResponse(url=f"/board?error={exc}", status_code=303)
+
+    if _schedule_job_already_running(db, brand.id):
+        return RedirectResponse(
+            url="/board?error=A schedule job is already running for this brand - wait for it to "
+            "finish (watch the Scheduled column) before starting another run.",
+            status_code=303,
+        )
+
+    rows = (
+        db.query(ContentItem.id, func.min(PostizPost.scheduled_at).label("earliest"))
+        .join(PostizPost, PostizPost.content_item_id == ContentItem.id)
+        .filter(ContentItem.brand_kit_id == brand.id, PostizPost.scheduled_at.isnot(None))
+        .group_by(ContentItem.id)
+        .order_by(func.min(PostizPost.scheduled_at))
+        .all()
+    )
+    item_ids = [str(row.id) for row in rows]
+    if not item_ids:
+        return RedirectResponse(url="/board?error=No scheduled posts to reschedule", status_code=303)
+
+    slots = build_schedule_slots(start, end, posts_per_day, day_start_hour, day_end_hour, tz_offset_minutes)
+    if not slots:
+        return RedirectResponse(url="/board?error=No time slots in that range", status_code=303)
+
+    pairs = list(zip(item_ids, slots))
+    _set_schedule_job_lock(db, brand.id)
+    run_in_background(_run_reschedule_all, pairs, brand.id)
+    return RedirectResponse(
+        url=f"/board?error=Rescheduling {len(pairs)} post(s) in the background - old Postiz posts are being cancelled first",
         status_code=303,
     )
 

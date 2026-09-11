@@ -19,6 +19,18 @@ from backend.app.llm.user_keys import resolve_api_key
 # Provider prefixes follow LiteLLM's "<provider>/<model>" convention.
 DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "researcher_triage": ("anthropic", "anthropic/claude-haiku-4-5"),
+    # The GitHub-sourced sibling of researcher_triage - proposes several
+    # distinct post angles from a repo's README/docs/commits instead of
+    # triaging a newsletter (see researcher/github_angles.py).
+    "researcher_github_angles": ("anthropic", "anthropic/claude-sonnet-5"),
+    # The product-catalog sibling of researcher_triage - proposes several
+    # distinct e-commerce post angles from a real WooCommerce product
+    # listing (see researcher/product_angles.py).
+    "researcher_product_angles": ("anthropic", "anthropic/claude-sonnet-5"),
+    # The RSS-feed sibling of researcher_triage - scores a batch of
+    # already-discrete feed entries instead of triaging a newsletter (see
+    # researcher/rss_angles.py).
+    "researcher_rss_triage": ("anthropic", "anthropic/claude-haiku-4-5"),
     "researcher_niche_evolution": ("anthropic", "anthropic/claude-sonnet-5"),
     "analytical_brief": ("anthropic", "anthropic/claude-sonnet-5"),
     # Combined-drafting brands (brand_kit.combined_drafting) skip the
@@ -32,8 +44,22 @@ DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     # Claude's Marathi output quality wasn't good enough; GPT-5.4 swapped in
     # for those two languages specifically, Claude stays default elsewhere.
     "content_writer_localized": ("openai", "openai/gpt-5.4"),
+    # Used instead of "content_writer" when brand_kit.content_voice ==
+    # "personal" - first-person builder voice for posts about your own
+    # projects, see content_writer/prompts.py's SYSTEM_PROMPT_PERSONAL.
+    "content_writer_personal": ("anthropic", "anthropic/claude-opus-5"),
+    # Used instead of "content_writer" when brand_kit.content_voice ==
+    # "product" - persuasive e-commerce copy for the WooCommerce catalog
+    # source, see content_writer/prompts.py's SYSTEM_PROMPT_PRODUCT.
+    "content_writer_product": ("anthropic", "anthropic/claude-opus-5"),
     "graphic_designer_direction": ("anthropic", "anthropic/claude-sonnet-5"),
     "reel_shotlist": ("anthropic", "anthropic/claude-sonnet-5"),
+    "carousel_shotlist": ("anthropic", "anthropic/claude-sonnet-5"),
+    # Both the shared-background and per-slide creative-direction prompts
+    # (carousel_editor/graph.py) share this one task, same as Graphic
+    # Designer's three creative-direction prompts sharing
+    # "graphic_designer_direction".
+    "carousel_direction": ("anthropic", "anthropic/claude-sonnet-5"),
 }
 
 # Curated so the brand-kit UI offers a dropdown, not free text - a typo'd
@@ -55,12 +81,19 @@ MODEL_CHOICES: dict[tuple[str, str], str] = {
 # get_video_model_key, exposed on the board's settings panel instead).
 CONFIGURABLE_AGENT_TASKS: dict[str, str] = {
     "researcher_triage": "Researcher (triage which articles are worth posting)",
+    "researcher_github_angles": "Researcher (GitHub post angles)",
+    "researcher_product_angles": "Researcher (product post angles)",
+    "researcher_rss_triage": "Researcher (RSS feed triage)",
     "analytical_brief": "Analytical (writes the brief)",
     "analytical_combined_draft": "Combined drafting (brief + post together)",
     "content_writer": "Content Writer",
     "content_writer_localized": "Content Writer (Hindi/Marathi)",
+    "content_writer_personal": "Content Writer (personal/builder voice)",
+    "content_writer_product": "Content Writer (product/e-commerce voice)",
     "graphic_designer_direction": "Graphic Designer (creative-direction prompt)",
     "reel_shotlist": "Reel Editor (shot-listing)",
+    "carousel_shotlist": "Carousel Editor (shot-listing)",
+    "carousel_direction": "Carousel Editor (creative-direction prompt)",
 }
 
 

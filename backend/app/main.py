@@ -20,7 +20,7 @@ from backend.app.auth.basic import hash_password
 from backend.app.auth.brand_deps import NoBrandAccess
 from backend.app.auth.deps import NotAuthenticated, get_current_user
 from backend.app.config import get_settings
-from backend.app.db.models import ContentItem, IngestedEmail, User
+from backend.app.db.models import ContentItem, IngestedEmail, IngestedRssItem, SyncState, User
 from backend.app.db.session import SessionLocal
 from backend.app.worker.scheduler import start_scheduler, stop_scheduler
 
@@ -103,11 +103,51 @@ def recover_orphaned_email_claims() -> None:
         db.close()
 
 
+def recover_orphaned_rss_claims() -> None:
+    """Same reasoning as recover_orphaned_email_claims, for
+    orchestrator.py's process_rss_batch - it atomically claims a batch of
+    entries (status "new" -> "processing") before triaging them."""
+    db = SessionLocal()
+    try:
+        stuck = (
+            db.query(IngestedRssItem)
+            .filter(IngestedRssItem.status == "processing")
+            .update({"status": "new"}, synchronize_session=False)
+        )
+        if stuck:
+            db.commit()
+    finally:
+        db.close()
+
+
+def recover_orphaned_schedule_locks() -> None:
+    """Same "nothing survives a process restart" reasoning as
+    recover_orphaned_processing_items, for routes_board.py's
+    auto_schedule/reschedule_all concurrency lock (a SyncState row per
+    brand, guarding against two overlapping background schedule jobs
+    double-scheduling the same posts - found live on a real brand). Any
+    lock row present at boot is guaranteed stale, not just old - clear
+    unconditionally rather than waiting out its staleness window."""
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(SyncState)
+            .filter(SyncState.key == routes_board._SCHEDULE_LOCK_KEY)
+            .delete(synchronize_session=False)
+        )
+        if deleted:
+            db.commit()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap_admin_user()
     recover_orphaned_processing_items()
     recover_orphaned_email_claims()
+    recover_orphaned_rss_claims()
+    recover_orphaned_schedule_locks()
     start_scheduler()
     yield
     stop_scheduler()

@@ -29,6 +29,7 @@ class Stage(StrEnum):
 class Format(StrEnum):
     POSTER = "poster"
     REEL = "reel"
+    CAROUSEL = "carousel"
     TEXT_ONLY = "text_only"
 
 

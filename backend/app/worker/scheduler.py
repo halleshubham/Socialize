@@ -3,9 +3,11 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from backend.app.db.models import OAuthCredential
+from backend.app.db.models import BrandKit, OAuthCredential
 from backend.app.db.session import SessionLocal
+from backend.app.worker.cleanup import run_discarded_cleanup
 from backend.app.worker.pipeline import run_daily_fetch
+from backend.app.worker.rss_pipeline import run_rss_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,29 @@ def _daily_fetch_job() -> None:
             logger.exception("Daily Gmail fetch job failed for brand %s", brand_id)
 
 
+def _daily_rss_fetch_job() -> None:
+    db = SessionLocal()
+    try:
+        brand_ids = [b.id for b in db.query(BrandKit).all() if b.rss_feeds]
+    finally:
+        db.close()
+
+    for brand_id in brand_ids:
+        try:
+            count = run_rss_fetch(brand_id)
+            logger.info("Daily RSS fetch for brand %s: %d entr(y/ies) processed", brand_id, count)
+        except Exception:
+            logger.exception("Daily RSS fetch job failed for brand %s", brand_id)
+
+
+def _daily_discarded_cleanup_job() -> None:
+    try:
+        deleted = run_discarded_cleanup()
+        logger.info("Daily discarded-item cleanup: %d content item(s) deleted", deleted)
+    except Exception:
+        logger.exception("Daily discarded-item cleanup job failed")
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is not None:
@@ -44,6 +69,8 @@ def start_scheduler() -> BackgroundScheduler:
     # 06:00 local time daily, per the plan. Swap for Celery Beat in Phase 3
     # once there's a real job queue.
     _scheduler.add_job(_daily_fetch_job, CronTrigger(hour=6, minute=0), id="daily_gmail_fetch")
+    _scheduler.add_job(_daily_rss_fetch_job, CronTrigger(hour=6, minute=15), id="daily_rss_fetch")
+    _scheduler.add_job(_daily_discarded_cleanup_job, CronTrigger(hour=6, minute=30), id="daily_discarded_cleanup")
     _scheduler.start()
     return _scheduler
 

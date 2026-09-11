@@ -4,11 +4,6 @@ presenter/on-camera, and motion-graphics/animated. Mirrors
 graphic_designer/templates.py's pattern: single source of truth for the
 choice list (UI dropdown) and each template's generation behavior, inferred
 by the Content Writer, user-overridable on the board before generation.
-
-A fact/quote "text card" cutaway (see reel_editor/text_card.py) is a
-cross-cutting scene type available within any of the three templates, not a
-separate template of its own - confirmed against the same research as a
-better fit than a 4th template.
 """
 
 TEMPLATE_CHOICES: dict[str, str] = {

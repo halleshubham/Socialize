@@ -19,7 +19,13 @@ def build_user_prompt(
     article_text: str,
     source_context: str,
 ) -> str:
-    truncated_text = article_text[:12000]
+    # 20000, not content_writer's tighter 8000 - this is a plain-text,
+    # cheap-model step with no JSON-structure risk from a long input, and
+    # it's the only place the brief (and everything downstream that reads
+    # the brief instead of the full article) gets grounded, so a fact past
+    # the old 12000-char cutoff on a long article could otherwise never
+    # reach any prompt in the pipeline.
+    truncated_text = article_text[:20000]
     return f"""Niche / what the user wants to post about:
 {niche_prompt}
 
@@ -40,7 +46,7 @@ def _build_combined_system_prompt() -> str:
     # response - used only for brands with combined_drafting enabled
     # (agents/orchestrator.py's _analytical_node), so a single cheap call
     # produces everything a normal run would need two LLM calls for.
-    from backend.agents.content_writer.prompts import POSTER_TEMPLATE_GUIDE, REEL_TEMPLATE_GUIDE
+    from backend.agents.content_writer.prompts import CAROUSEL_GUIDE, POSTER_TEMPLATE_GUIDE, REEL_TEMPLATE_GUIDE
 
     return f"""You are doing both the Analytical and Content Writing jobs in one pass, in a \
 social-media content pipeline. The Researcher agent has already flagged this specific article \
@@ -51,7 +57,9 @@ matters, and which specific part deserves the most emphasis - for the user's own
 the post itself. End it with one line starting "Emphasize:" naming the single most important \
 thing to lead with.
 2. copy_text: the actual post caption, written in the requested language and tone. Punchy, not \
-corporate. Should stand alone without needing the article open.
+corporate. Should stand alone without needing the article open. Vary your hook style, sentence \
+rhythm, and structure from article to article based on what actually fits this one - don't default \
+to the same opening move or shape every time.
 3. hashtags: a JSON array of 2-5 relevant hashtag strings (include the # symbol), from your own \
 knowledge of the topic - no web search tool is available on this path.
 
@@ -68,8 +76,10 @@ describe the central visual motif instead.
 
 {REEL_TEMPLATE_GUIDE}
 
-Only produce the fields for the given format - omit the other format's fields entirely. If \
-format is "text_only", omit both poster and reel fields.
+{CAROUSEL_GUIDE}
+
+Only produce the fields for the given format - omit every other format's fields entirely. If \
+format is "text_only", omit poster, reel, and carousel fields.
 
 If you are given "Revision feedback" below, treat it as instructions from the user on what to \
 change from a previous draft - follow it precisely, regenerating the brief and copy together.
@@ -84,7 +94,8 @@ Respond with ONLY a JSON object as your final message, no markdown fence, no ext
   "poster_content": {{...matching the chosen template}},
   "reel_script": "...",
   "character_description": "...",
-  "reel_template": "explainer_influencer" | "faceless" | "animated_contextual"
+  "reel_template": "explainer_influencer" | "faceless" | "animated_contextual",
+  "carousel_script": "..."
 }}"""
 
 
@@ -101,7 +112,7 @@ def build_user_prompt_combined(
     format_: str,
     revision_feedback: str | None,
 ) -> str:
-    truncated_text = article_text[:12000]
+    truncated_text = article_text[:20000]  # see build_user_prompt's comment on why 20000
     feedback_block = f"\nRevision feedback from the user:\n{revision_feedback}\n" if revision_feedback else ""
     return f"""Niche / what the user wants to post about:
 {niche_prompt}

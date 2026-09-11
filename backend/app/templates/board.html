@@ -29,15 +29,31 @@
     table.emails-table td, table.emails-table th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); }
     table.emails-table th { color: var(--text-muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .02em; }
 
+    .shotlist-table-wrap { overflow-x: auto; margin: .5rem 0; }
+    table.shotlist-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: .78rem; }
+    table.shotlist-table td, table.shotlist-table th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    table.shotlist-table th { color: var(--text-muted); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; }
+    table.shotlist-table td.shotlist-timeframe { white-space: nowrap; color: var(--text-muted); }
+
     .board { display: flex; gap: .9rem; overflow-x: auto; align-items: flex-start; padding-bottom: .5rem; }
     .column { flex: 0 0 270px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; height: calc(100vh - 16rem); overflow-y: auto; }
+
+    .board-tabs { display: none; }
 
     @media (max-width: 640px) {
       .board-toolbar { flex-direction: column; align-items: stretch; }
       .search-form, .cost-cap-form { min-width: 0; width: 100%; }
       .search-form input[type=text] { min-width: 0; flex-basis: 100%; }
-      .board { gap: .6rem; scroll-snap-type: x proximity; }
-      .column { flex-basis: 84vw; height: calc(100vh - 24rem); scroll-snap-align: start; }
+
+      .board-tabs { display: flex; gap: .4rem; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: .5rem; margin-bottom: .6rem; scrollbar-width: none; }
+      .board-tabs::-webkit-scrollbar { display: none; }
+      .board-tab { flex: 0 0 auto; padding: .45rem .8rem; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); font-size: .8rem; font-weight: 650; white-space: nowrap; cursor: pointer; }
+      .board-tab.active { background: var(--primary-tint); color: var(--primary); border-color: var(--primary); }
+      .board-tab .count { opacity: .7; margin-left: .2rem; }
+
+      .board { display: block; overflow-x: visible; }
+      .column { display: none; flex-basis: auto; height: calc(100vh - 22rem); }
+      .column.mobile-active { display: block; }
     }
     .column h3 { margin: 0 0 .6rem; font-size: .82rem; font-weight: 650; display: flex; align-items: center; gap: .4rem; justify-content: space-between; position: sticky; top: 0; background: var(--bg-subtle); padding-bottom: .3rem; }
     .column h3 .count { color: var(--text-faint); font-weight: 600; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 999px; padding: 0 .45rem; font-size: .72rem; }
@@ -84,6 +100,11 @@
     dialog.kmodal .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .7rem; }
     dialog.kmodal img.media-preview, dialog.kmodal video.media-preview { max-width: 100%; border-radius: var(--radius-sm); margin-bottom: .6rem; display: block; }
     dialog.kmodal video.media-preview { max-height: 70vh; }
+    dialog.kmodal .carousel-preview { display: flex; gap: .5rem; overflow-x: auto; margin-bottom: .6rem; }
+    dialog.kmodal .carousel-preview img.media-preview { max-width: 65%; flex: 0 0 auto; margin-bottom: 0; }
+    .text-review-form { border: 1px solid var(--warning); border-radius: var(--radius-sm); padding: .7rem .8rem; margin: .5rem 0; background: color-mix(in srgb, var(--warning) 8%, transparent); }
+    .text-review-row { display: flex; gap: .4rem; }
+    .text-review-row input { flex: 1; }
     dialog.kmodal .hashtags { color: var(--primary); font-size: .85rem; margin-bottom: .6rem; }
     dialog.kmodal select { width: auto; }
     dialog.kmodal .error-box { background: var(--danger-tint); border: 1px solid var(--danger); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; margin-bottom: .6rem; font-size: .82rem; white-space: pre-wrap; }
@@ -113,6 +134,12 @@
       <button type="submit" class="btn btn-primary">Fetch now</button>
     </form>
 
+    {% if active_brand.rss_feeds %}
+      <form method="post" action="/board/fetch-rss">
+        <button type="submit" class="btn">Fetch RSS</button>
+      </form>
+    {% endif %}
+
     <form class="search-form" method="post" action="/board/search-query">
       <select onchange="this.form.query.value = this.value">
         <option value="">Preset...</option>
@@ -124,8 +151,81 @@
       <button type="submit" class="btn">Save search</button>
     </form>
 
+    {% if active_brand.github_repos %}
+      <button type="button" class="btn" onclick="document.getElementById('github-draft-modal').showModal()">Draft from GitHub&hellip;</button>
+    {% endif %}
+
+    {% if website_products %}
+      <button type="button" class="btn" onclick="document.getElementById('website-draft-modal').showModal()">Draft from Website&hellip;</button>
+    {% endif %}
+
     <button type="button" class="settings-gear-btn" title="Reel &amp; auto-mode settings" onclick="document.getElementById('settings-modal').showModal()">⚙️</button>
   </div>
+
+  {% if active_brand.github_repos %}
+    <dialog id="github-draft-modal" class="settings-modal">
+      <button type="button" class="modal-close" onclick="document.getElementById('github-draft-modal').close()">✕</button>
+      <h2>Draft from GitHub</h2>
+      <p class="faint" style="margin-top:-.4rem">Grounds drafts in a repo's real README/docs/commit history instead of a newsletter - proposes a few distinct post angles about the feature you describe below.</p>
+
+      <form method="post" action="/board/draft-github-posts" onsubmit="return confirm('Draft posts for this feature? This runs in the background and adds cards to Needs Review.')" style="display:block">
+        <label>Repo</label>
+        <select name="repo_full_name">
+          {% for repo in active_brand.github_repos %}
+            <option value="{{ repo.full_name }}">{{ repo.full_name }}</option>
+          {% endfor %}
+        </select>
+
+        <label>What did you just build/ship?</label>
+        <textarea name="feature_description" rows="3" required placeholder="e.g. Bulk auto-schedule to Postiz across a date range, with rate-limit-aware pacing"></textarea>
+
+        <label>Extra context (optional)</label>
+        <textarea name="extra_context" rows="2" placeholder="Anything else worth grounding the angles in"></textarea>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:.8rem; width:100%">Draft posts</button>
+      </form>
+    </dialog>
+  {% endif %}
+
+  {% if website_products %}
+    <dialog id="website-draft-modal" class="settings-modal">
+      <button type="button" class="modal-close" onclick="document.getElementById('website-draft-modal').close()">✕</button>
+      <h2>Draft from Website</h2>
+      <p class="faint" style="margin-top:-.4rem">Grounds drafts in a real product's own listing (name, price, description) from your catalog - the poster/reel use the product's real photo, not an AI-generated one.</p>
+
+      <form method="post" action="/board/draft-from-website" onsubmit="return confirm('Draft posts for this product? This runs in the background and adds cards to Needs Review.')" style="display:block">
+        <label>Product</label>
+        <select name="product_id">
+          {% for product in website_products %}
+            <option value="{{ product.id }}">{{ product.name }}{% if product.prices %} - {{ product.prices.currency_symbol }}{{ "%.2f" | format(product.prices.price | int / (10 ** (product.prices.currency_minor_unit | int))) }}{% endif %}</option>
+          {% endfor %}
+        </select>
+
+        <label>Extra context (optional)</label>
+        <textarea name="extra_context" rows="2" placeholder="Anything else worth grounding the angles in - e.g. a current sale/offer"></textarea>
+
+        <label>Format (optional override)</label>
+        <select name="format">
+          <option value="">Brand default{% if active_brand.combined_drafting %} ({{ active_brand.combined_drafting_format }}){% endif %}</option>
+          <option value="text_only">Text only</option>
+          <option value="poster">Poster</option>
+          <option value="reel">Reel (video)</option>
+          <option value="carousel">Carousel</option>
+        </select>
+
+        <label>Language (optional override)</label>
+        <select name="language">
+          <option value="">Brand default ({{ language_choices.get(active_brand.default_language, active_brand.default_language) }})</option>
+          {% for code, name in language_choices.items() %}
+            <option value="{{ code }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+        <p class="hint">Only needed for a combined-drafting brand, where every draft otherwise uses the brand's fixed default format/language.</p>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:.8rem; width:100%">Draft posts</button>
+      </form>
+    </dialog>
+  {% endif %}
 
   <dialog id="settings-modal" class="settings-modal">
     <button type="button" class="modal-close" onclick="document.getElementById('settings-modal').close()">✕</button>
@@ -140,6 +240,16 @@
         <button type="submit" class="btn btn-sm">Refetch</button>
       </form>
       <p class="hint">Safe to run repeatedly - anything already fetched for this brand is skipped either way, so this only surfaces what's actually new within the window.</p>
+    </div>
+
+    <div class="settings-section">
+      <label class="section-label">Discarded data retention</label>
+      <form method="post" action="/board/discard-retention" title="How long a discarded card sticks around before it and its media are permanently deleted - 0 disables auto-deletion">
+        <label>days</label>
+        <input type="number" step="1" min="0" name="retention_days" value="{{ discard_retention_days }}">
+        <button type="submit" class="btn btn-sm">Save</button>
+      </form>
+      <p class="hint">A daily background job permanently deletes discarded cards (and their generated media) once they've been discarded longer than this. Set to 0 to keep discarded cards forever.</p>
     </div>
 
     <div class="settings-section">
@@ -161,6 +271,18 @@
         </select>
       </form>
       <p class="hint">Standard is ~5x lite's per-second cost.</p>
+    </div>
+
+    <div class="settings-section">
+      <label class="section-label">Poster/reel image model</label>
+      <form method="post" action="/board/poster-image-model" title="Image-gen model for every poster and reel character reference this brand generates next">
+        <select name="model_key" onchange="this.form.requestSubmit()">
+          {% for key, label in image_model_labels.items() %}
+            <option value="{{ key }}" {% if key == image_model_key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <p class="hint">Applies to posters (full-design, product-photo, legacy background) and reel character references.</p>
     </div>
 
     <div class="settings-section">
@@ -222,6 +344,47 @@
     </form>
   </dialog>
 
+  <dialog id="reschedule-all-modal" class="settings-modal">
+    <button type="button" class="modal-close" onclick="document.getElementById('reschedule-all-modal').close()">✕</button>
+    <h2>Reschedule all</h2>
+    <p class="faint" style="margin-top:-.4rem">Cancels every existing Postiz post for your currently-scheduled items, then re-sends them fresh across a new date range. Use this to fix a bad batch - not for routine scheduling.</p>
+
+    <form method="post" action="/board/reschedule-all" onsubmit="return submitRescheduleAll(this)" style="display:block">
+      <div class="settings-section" style="padding-top:0; border-top:none">
+        <label class="section-label">Range</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="week" checked onchange="toggleCustomRange(this.form)" style="width:auto"> This week (next 7 days)</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="2weeks" onchange="toggleCustomRange(this.form)" style="width:auto"> Next 2 weeks</label>
+        <label style="font-weight:400; display:flex; align-items:center; gap:.4rem"><input type="radio" name="range_preset" value="custom" onchange="toggleCustomRange(this.form)" style="width:auto"> Custom range</label>
+
+        <div class="custom-range-fields" hidden>
+          <input type="date" name="start_date">
+          <span class="faint">to</span>
+          <input type="date" name="end_date">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <label class="section-label">Posts per day</label>
+        <input type="number" name="posts_per_day" value="1" min="1" max="20" style="width:6rem">
+      </div>
+
+      <div class="settings-section">
+        <label class="section-label">Spread posts between</label>
+        <div style="display:flex; gap:.5rem; align-items:center">
+          <input type="time" name="day_start_time" value="09:00" style="width:auto">
+          <span class="faint">and</span>
+          <input type="time" name="day_end_time" value="21:00" style="width:auto">
+        </div>
+        <p class="hint">Local time - posts on a day with more than one slot are spaced evenly across this window.</p>
+      </div>
+
+      <input type="hidden" name="day_start_hour">
+      <input type="hidden" name="day_end_hour">
+      <input type="hidden" name="tz_offset_minutes">
+      <button type="submit" class="btn btn-danger" style="margin-top:.8rem; width:100%">Cancel &amp; reschedule all</button>
+    </form>
+  </dialog>
+
   <details class="emails-panel">
     <summary>Fetched emails ({{ recent_emails | length }} most recent) — which mails have been looked at</summary>
     <div class="emails-table-wrap">
@@ -253,6 +416,12 @@
     {% if media %}
       {% if media[1] == "reel" %}
         <video class="media-preview" src="{{ media[0] }}" controls playsinline></video>
+      {% elif media[1] == "carousel" %}
+        <div class="carousel-preview">
+          {% for url in media[0] %}
+            <img class="media-preview" src="{{ url }}" alt="Generated carousel slide {{ loop.index }}">
+          {% endfor %}
+        </div>
       {% else %}
         <img class="media-preview" src="{{ media[0] }}" alt="Generated media">
       {% endif %}
@@ -279,7 +448,7 @@
       <div class="icon-row">
         {{ priority_dot(item.priority_score) }}
         {% if item.article_url %}<span title="has article link">&#128279;</span>{% endif %}
-        {% if media %}<span title="has generated media">{{ "🎬" if media[1] == "reel" else "🖼️" }}</span>{% endif %}
+        {% if media %}<span title="has generated media">{{ "🎬" if media[1] == "reel" else ("🎠" if media[1] == "carousel" else "🖼️") }}</span>{% endif %}
         {% if item.format %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.format }}</span>{% endif %}
         {% if item.format and item.language and item.language != "en" %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.language }}</span>{% endif %}
         {% if email %}<span title="{{ email.sender }}">&#9993; {{ email.sender.split('<')[0].strip()[:18] }}</span>{% endif %}
@@ -309,6 +478,8 @@
           <form method="post" action="/board/{{ item.id }}/retry-content-writer">
           {% elif item.format == "reel" %}
           <form method="post" action="/board/{{ item.id }}/retry-reel">
+          {% elif item.format == "carousel" %}
+          <form method="post" action="/board/{{ item.id }}/retry-carousel">
           {% else %}
           <form method="post" action="/board/{{ item.id }}/retry-poster">
           {% endif %}
@@ -320,7 +491,25 @@
         </div>
 
       {% elif key == "researched" %}
-        <p class="muted">Fetching the article and writing a brief - refresh in a moment. If it's still here after a while, the fetch or LLM call may have failed - use Discard below and it'll be retried on the next fetch.</p>
+        <p class="muted">Fetching the article and writing a brief - refresh in a moment. If it's still here after a while, the fetch or LLM call may have failed.</p>
+        <form method="post" action="/board/{{ item.id }}/send-to-content-review">
+          <label>Format</label>
+          <select name="format">
+            <option value="text_only">Text only</option>
+            <option value="poster">Poster</option>
+            <option value="reel">Reel (video)</option>
+            <option value="carousel">Carousel</option>
+          </select>
+          <label>Language</label>
+          <select name="language">
+            {% for code, name in language_choices.items() %}
+              <option value="{{ code }}" {% if code == default_language %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Send to Content Review</button>
+          </div>
+        </form>
         <form method="post" action="/board/{{ item.id }}/discard" class="actions">
           <button type="submit" class="btn btn-danger">Discard</button>
         </form>
@@ -333,6 +522,7 @@
             <option value="text_only">Text only</option>
             <option value="poster">Poster</option>
             <option value="reel">Reel (video)</option>
+            <option value="carousel">Carousel</option>
           </select>
           <label>Language (only used if sent to Content Writer)</label>
           <select name="language">
@@ -346,42 +536,164 @@
             <button type="submit" name="decision" value="write_myself" class="btn">Write myself</button>
             <button type="submit" name="decision" value="send_to_content_writer" class="btn btn-primary">Send to Content Writer</button>
             <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
+            {% if active_brand.combined_drafting %}
+              <button type="submit" formaction="/board/{{ item.id }}/send-to-content-review" class="btn" title="Uses the Format/Language selected above">Fast-forward via combined drafting</button>
+            {% endif %}
           </div>
         </form>
 
       {% elif key == "drafted" %}
         <div class="modal-body">{{ item.copy_text }}</div>
         {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-        {% if item.format == "poster" and item.poster_headline %}<p class="muted">Poster headline: "{{ item.poster_headline }}"</p>{% endif %}
-        {% if item.format == "poster" and item.poster_template %}
-          <form method="post" action="/board/{{ item.id }}/poster-template">
-            <label>Poster layout</label>
-            <select name="poster_template" onchange="this.form.requestSubmit()">
-              {% for value, label in template_choices.items() %}
-                <option value="{{ value }}" {% if value == item.poster_template %}selected{% endif %}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </form>
+        {% set text_review = item.language in ("hi", "mr") %}
+
+        {% if item.format == "poster" %}
+          {% if text_review and item.poster_template %}
+            {% set pc = item.poster_content or {} %}
+            <form method="post" action="/board/{{ item.id }}/edit-poster-content" class="text-review-form">
+              <p class="faint">Marathi/Hindi text is AI-drafted and can need fixing - edit it directly here before Approve.</p>
+              <label>Poster headline</label>
+              <textarea name="poster_headline" rows="1">{{ item.poster_headline or '' }}</textarea>
+              {% if item.poster_template == "quote" %}
+                <label>Quote</label>
+                <textarea name="quote_text" rows="2">{{ pc.quote_text or '' }}</textarea>
+                <label>Attribution</label>
+                <input type="text" name="attribution" value="{{ pc.attribution or '' }}">
+                <label>Citation</label>
+                <input type="text" name="citation" value="{{ pc.citation or '' }}">
+              {% elif item.poster_template == "tribute" %}
+                <label>Name</label>
+                <input type="text" name="name" value="{{ pc.name or '' }}">
+                <label>Achievement</label>
+                <input type="text" name="achievement" value="{{ pc.achievement or '' }}">
+                <label>Quote (optional)</label>
+                <textarea name="quote_text" rows="2">{{ pc.quote_text or '' }}</textarea>
+                <label>Tribute line</label>
+                <textarea name="tribute_line" rows="2">{{ pc.tribute_line or '' }}</textarea>
+              {% elif item.poster_template == "narrative" %}
+                <label>Body text</label>
+                <textarea name="body_text" rows="4">{{ pc.body_text or '' }}</textarea>
+              {% elif item.poster_template == "fact_critique" %}
+                <label>Facts (up to 3)</label>
+                {% for i in range(3) %}
+                  {% set fact = pc.facts[i] if pc.facts and i < (pc.facts | length) else {} %}
+                  <div class="text-review-row">
+                    <input type="text" name="facts_stat_{{ i }}" value="{{ fact.stat or '' }}" placeholder="Stat {{ i + 1 }}">
+                    <input type="text" name="facts_source_{{ i }}" value="{{ fact.source or '' }}" placeholder="Source">
+                  </div>
+                {% endfor %}
+                <label>Critique line</label>
+                <textarea name="critique_line" rows="2">{{ pc.critique_line or '' }}</textarea>
+              {% elif item.poster_template == "trivia" %}
+                <label>Headline</label>
+                <input type="text" name="headline" value="{{ pc.headline or '' }}">
+                <label>Body text</label>
+                <textarea name="body_text" rows="2">{{ pc.body_text or '' }}</textarea>
+                <label>Highlight phrases (up to 2)</label>
+                {% for i in range(2) %}
+                  {% set phrase = pc.highlight_phrases[i] if pc.highlight_phrases and i < (pc.highlight_phrases | length) else '' %}
+                  <input type="text" name="highlight_phrases_{{ i }}" value="{{ phrase }}" placeholder="Phrase {{ i + 1 }}">
+                {% endfor %}
+              {% elif item.poster_template == "event" %}
+                <label>Event title</label>
+                <input type="text" name="event_title" value="{{ pc.event_title or '' }}">
+                <label>Date/time</label>
+                <input type="text" name="datetime" value="{{ pc.datetime or '' }}">
+                <label>Location</label>
+                <input type="text" name="location" value="{{ pc.location or '' }}">
+                <label>CTA</label>
+                <input type="text" name="cta" value="{{ pc.cta or '' }}">
+              {% endif %}
+              <button type="submit" class="btn" style="margin-top:.4rem">Save text</button>
+            </form>
+          {% elif item.poster_headline %}
+            <p class="muted">Poster headline: "{{ item.poster_headline }}"</p>
+          {% endif %}
+          {% if item.poster_template %}
+            <form method="post" action="/board/{{ item.id }}/poster-template">
+              <label>Poster layout</label>
+              <select name="poster_template" onchange="this.form.requestSubmit()">
+                {% for value, label in template_choices.items() %}
+                  <option value="{{ value }}" {% if value == item.poster_template %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          {% endif %}
         {% endif %}
-        {% if item.format == "reel" and item.reel_script %}<p class="muted">Reel script: {{ item.reel_script }}</p>{% endif %}
-        {% if item.format == "reel" and item.reel_template %}
-          <form method="post" action="/board/{{ item.id }}/reel-template">
-            <label>Reel style</label>
-            <select name="reel_template" onchange="this.form.requestSubmit()">
-              {% for value, label in reel_template_choices.items() %}
-                <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
+
+        {% if item.format == "reel" %}
+          {% if item.reel_script %}<p class="muted">Reel script: {{ item.reel_script }}</p>{% endif %}
+          {% if item.reel_scenes %}
+            <div class="shotlist-table-wrap">
+              <table class="shotlist-table">
+                <thead>
+                  <tr><th>#</th><th>Timeframe</th><th>Visual</th><th>Text on visual</th><th>Music</th><th>Voiceover</th></tr>
+                </thead>
+                <tbody>
+                  {% for scene in item.reel_scenes %}
+                    <tr>
+                      <td>{{ loop.index }}{% if scene.location == "host" %} (host){% endif %}</td>
+                      <td class="shotlist-timeframe">{{ scene.timeframe or '' }}</td>
+                      <td>{{ scene.description or '' }}</td>
+                      <td>{{ scene.text_on_visual or "None" }}</td>
+                      <td>{{ scene.music or "None" }}</td>
+                      <td>{{ scene.narration or '' }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+          {% if text_review and item.reel_scenes %}
+            <form method="post" action="/board/{{ item.id }}/edit-reel-scenes" class="text-review-form">
+              <p class="faint">Marathi/Hindi narration is AI-drafted and can need fixing - edit the exact spoken text and music direction per scene before Approve.</p>
+              {% for scene in item.reel_scenes %}
+                <label>Scene {{ loop.index }}{% if scene.location == "host" %} (host){% endif %} narration</label>
+                <textarea name="narration_{{ loop.index0 }}" rows="2">{{ scene.narration or '' }}</textarea>
+                <label>Scene {{ loop.index }} music</label>
+                <input type="text" name="music_{{ loop.index0 }}" value="{{ scene.music or '' }}">
               {% endfor %}
-            </select>
-          </form>
+              <button type="submit" class="btn" style="margin-top:.4rem">Save narration &amp; music</button>
+            </form>
+          {% endif %}
+          {% if item.reel_template %}
+            <form method="post" action="/board/{{ item.id }}/reel-template">
+              <label>Reel style</label>
+              <select name="reel_template" onchange="this.form.requestSubmit()">
+                {% for value, label in reel_template_choices.items() %}
+                  <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          {% endif %}
+        {% endif %}
+
+        {% if item.format == "carousel" %}
+          {% if item.carousel_script %}<p class="muted">Carousel script: {{ item.carousel_script }}</p>{% endif %}
+          {% if item.carousel_slides %}
+            <form method="post" action="/board/{{ item.id }}/edit-carousel-slides" class="text-review-form">
+              <p class="faint">Slide text is AI-drafted and can need fixing - edit the exact rendered text per slide before Approve.</p>
+              {% for slide in item.carousel_slides %}
+                <label>Slide {{ loop.index }} headline</label>
+                <input type="text" name="headline_{{ loop.index0 }}" value="{{ slide.headline or '' }}">
+                <label>Slide {{ loop.index }} body text</label>
+                <textarea name="body_text_{{ loop.index0 }}" rows="2">{{ slide.body_text or '' }}</textarea>
+              {% endfor %}
+              <button type="submit" class="btn" style="margin-top:.4rem">Save slide text</button>
+            </form>
+          {% endif %}
         {% endif %}
         <form method="post" action="/board/{{ item.id }}/decide">
           <label>Feedback (used if you ask for a regenerate)</label>
           <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
           <div class="actions">
-            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve{% if item.format == "poster" %} &amp; generate poster{% elif item.format == "reel" %} &amp; generate reel{% endif %}</button>
+            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve{% if item.format == "poster" %} &amp; generate poster{% elif item.format == "reel" %} &amp; generate reel{% elif item.format == "carousel" %} &amp; generate carousel{% endif %}</button>
             <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
             <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
           </div>
+        </form>
+        <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
+          <button type="submit" class="btn">Back to Needs Review</button>
         </form>
         {% if item.format == "text_only" %}
           <p class="faint">Want a graphic or video for this post instead of (or alongside) plain text? This approves it first, then generates the new format - the caption above stays exactly as written.</p>
@@ -393,6 +705,10 @@
             <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
               <input type="hidden" name="target_format" value="reel">
               <button type="submit" class="btn">Approve &amp; generate reel</button>
+            </form>
+            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
+              <input type="hidden" name="target_format" value="carousel">
+              <button type="submit" class="btn">Approve &amp; generate carousel</button>
             </form>
           </div>
         {% endif %}
@@ -435,16 +751,33 @@
                 <button type="submit" class="btn">Generate reel instead</button>
               </form>
             {% endif %}
+            {% if item.format != "carousel" %}
+              <form method="post" action="/board/{{ item.id }}/generate-media">
+                <input type="hidden" name="target_format" value="carousel">
+                <button type="submit" class="btn">Generate carousel instead</button>
+              </form>
+            {% endif %}
           </div>
+          <form method="post" action="/board/{{ item.id }}/rewind-to-content-review" class="actions" style="margin-top:.5rem">
+            <button type="submit" class="btn">Back to Content Review</button>
+          </form>
         {% endif %}
+        <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
+          <button type="submit" class="btn">Back to Needs Review</button>
+        </form>
 
       {% elif key == "approved" %}
         {{ media_preview(media) }}
         {% if item.last_error %}<div class="error-box">{{ item.last_error }}</div>{% endif %}
+        {% if not item.copy_text %}<div class="modal-body">{{ item.brief }}</div>{% endif %}
+        <form method="post" action="/board/{{ item.id }}/write-copy">
+          <label>Copy text</label>
+          <textarea name="copy_text" rows="4" placeholder="Paste/edit your post copy here" required>{{ item.copy_text or '' }}</textarea>
+          <button type="submit" class="btn btn-primary" style="margin-top:.5rem">{{ "Update copy" if item.copy_text else "Save copy" }}</button>
+        </form>
         {% if item.copy_text %}
-          <div class="modal-body">{{ item.copy_text }}</div>
           {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin-bottom:.75rem" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now?')">
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.75rem 0" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now?')">
             <button type="submit" class="btn btn-primary">Send via WhatsApp</button>
           </form>
           <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin-bottom:.75rem; align-items:center" onsubmit="return submitPostiz(this)">
@@ -461,10 +794,19 @@
               <input type="hidden" name="target_format" value="reel">
               <button type="submit" class="btn">Generate reel</button>
             </form>
+            <form method="post" action="/board/{{ item.id }}/generate-media">
+              <input type="hidden" name="target_format" value="carousel">
+              <button type="submit" class="btn">Generate carousel</button>
+            </form>
           </div>
-        {% else %}
-          <p class="muted">You're writing this one yourself.</p>
-          <div class="modal-body">{{ item.brief }}</div>
+          <form method="post" action="/board/{{ item.id }}/rewind-to-content-review" class="actions" style="margin-top:.5rem">
+            <button type="submit" class="btn">Back to Content Review</button>
+          </form>
+        {% endif %}
+        {% if item.brief %}
+          <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
+            <button type="submit" class="btn">Back to Needs Review</button>
+          </form>
         {% endif %}
         <form method="post" action="/board/{{ item.id }}/discard" class="actions">
           <button type="submit" class="btn btn-danger">Discard</button>
@@ -485,9 +827,10 @@
           </div>
         {% endfor %}
         <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin:.75rem 0; align-items:center" onsubmit="return submitPostiz(this)">
-          <input type="datetime-local" name="schedule_at" style="width:auto">
+          <input type="datetime-local" name="schedule_at" style="width:auto" required title="This item is already scheduled - pick when this additional send should go out">
           <button type="submit" class="btn">Send to Postiz</button>
         </form>
+        <p class="faint" style="margin-top:-.5rem">Adds another send (e.g. a different channel or time) - it doesn't change the schedule shown above.</p>
 
       {% elif key == "discarded" %}
         <p class="muted">Rationale: {{ item.priority_rationale }}</p>
@@ -496,9 +839,17 @@
     </dialog>
   {% endmacro %}
 
+  <div class="board-tabs" role="tablist">
+    {% for key, label, stage in columns %}
+      <button type="button" class="board-tab" data-tab="{{ key }}">{{ label }} <span class="count">{{ items_by_stage[key] | length }}</span></button>
+    {% endfor %}
+    <button type="button" class="board-tab" data-tab="scheduled">Scheduled <span class="count">{{ scheduled_items | length }}</span></button>
+    <button type="button" class="board-tab" data-tab="discarded">Discarded <span class="count">{{ discarded | length }}</span></button>
+  </div>
+
   <div class="board">
     {% for key, label, stage in columns %}
-      <div class="column">
+      <div class="column" data-col="{{ key }}">
         <h3>{{ label }} <span class="count">{{ items_by_stage[key] | length }}</span></h3>
         {% if key in ("analyzed", "drafted", "media_generated") and items_by_stage[key] %}
           <form method="post" action="/board/approve-all" class="approve-all-form"
@@ -509,6 +860,7 @@
                 <option value="text_only">Text only</option>
                 <option value="poster" selected>Poster</option>
                 <option value="reel">Reel (video)</option>
+                <option value="carousel">Carousel</option>
               </select>
               <select name="language" title="Language for every card sent to Content Writer">
                 {% for code, name in language_choices.items() %}
@@ -517,6 +869,11 @@
               </select>
             {% endif %}
             <button type="submit" class="btn btn-sm btn-primary">Approve all ({{ items_by_stage[key] | length }})</button>
+          </form>
+          <form method="post" action="/board/discard-all" class="approve-all-form"
+                onsubmit="return confirm('Discard all {{ items_by_stage[key] | length }} card(s) in {{ label }}? This cannot be undone from here - they move to the Discarded column.')">
+            <input type="hidden" name="stage" value="{{ key }}">
+            <button type="submit" class="btn btn-sm btn-danger">Discard all ({{ items_by_stage[key] | length }})</button>
           </form>
         {% endif %}
         {% if key == "approved" %}
@@ -530,8 +887,11 @@
       </div>
     {% endfor %}
 
-    <div class="column">
+    <div class="column" data-col="scheduled">
       <h3>Scheduled <span class="count">{{ scheduled_items | length }}</span></h3>
+      {% if scheduled_items %}
+        <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('reschedule-all-modal').showModal()">Reschedule all&hellip;</button>
+      {% endif %}
       {% for item in scheduled_items %}
         {{ card(item, "scheduled", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id), scheduled_posts_by_item_id.get(item.id)) }}
       {% else %}
@@ -539,7 +899,7 @@
       {% endfor %}
     </div>
 
-    <div class="column discarded-col">
+    <div class="column discarded-col" data-col="discarded">
       <h3>Discarded <span class="count">{{ discarded | length }}</span></h3>
       {% for item in discarded %}
         {{ card(item, "discarded", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
@@ -557,12 +917,18 @@
     // real UTC ISO timestamp here, where the actual offset is known, before
     // the form submits. Blank stays blank (send now).
     function submitPostiz(form) {
-      if (!confirm('Send this post to your configured Postiz channels now?')) return false;
       var input = form.querySelector('input[name="schedule_at"]');
+      var when = 'now';
       if (input && input.value) {
-        input.value = new Date(input.value).toISOString();
+        var parsed = new Date(input.value);
+        if (isNaN(parsed.getTime())) {
+          alert('That date/time looks invalid - please re-pick it.');
+          return false;
+        }
+        when = 'for ' + parsed.toLocaleString();
+        input.value = parsed.toISOString();
       }
-      return true;
+      return confirm('Send this post to your configured Postiz channels ' + when + '?');
     }
 
     function toggleCustomRange(form) {
@@ -570,10 +936,49 @@
       form.querySelector('.custom-range-fields').hidden = !isCustom;
     }
 
+    (function () {
+      var tabs = document.querySelectorAll('.board-tab');
+      var columns = document.querySelectorAll('.column');
+      if (!tabs.length) return;
+      var STORAGE_KEY = 'socialize_board_tab';
+
+      function activate(key) {
+        var found = false;
+        columns.forEach(function (col) {
+          var match = col.dataset.col === key;
+          col.classList.toggle('mobile-active', match);
+          if (match) found = true;
+        });
+        if (!found) return false;
+        tabs.forEach(function (t) { t.classList.toggle('active', t.dataset.tab === key); });
+        try { localStorage.setItem(STORAGE_KEY, key); } catch (e) {}
+        return true;
+      }
+
+      tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          activate(tab.dataset.tab);
+          tab.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+        });
+      });
+
+      var saved = null;
+      try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+      if (!saved || !activate(saved)) {
+        activate(tabs[0].dataset.tab);
+      }
+    })();
+
     // Converts the two time-of-day pickers to fractional hours and grabs
     // the browser's real UTC offset (same reasoning as submitPostiz above -
     // the server has no other way to know what timezone these times mean).
-    function submitAutoSchedule(form) {
+    // Shared by the Auto-schedule and Reschedule-all modals - both post the
+    // same range/pacing fields (see _resolve_schedule_range server-side).
+    // Fills the hidden fields, validates a custom range was actually
+    // picked, and returns the human-readable range label for the caller's
+    // own confirm() text - or null if validation failed (caller should
+    // treat that as "don't submit").
+    function prepareScheduleForm(form) {
       function toHourFraction(t) {
         var parts = (t || '09:00').split(':');
         return parseInt(parts[0], 10) + (parseInt(parts[1], 10) || 0) / 60;
@@ -583,12 +988,27 @@
       form.querySelector('input[name="tz_offset_minutes"]').value = new Date().getTimezoneOffset();
 
       var preset = form.querySelector('input[name="range_preset"]:checked').value;
-      var label = preset === 'week' ? 'this week' : preset === '2weeks' ? 'the next 2 weeks' : 'the selected range';
       if (preset === 'custom' && (!form.start_date.value || !form.end_date.value)) {
         alert('Pick a start and end date first.');
-        return false;
+        return null;
       }
+      return preset === 'week' ? 'this week' : preset === '2weeks' ? 'the next 2 weeks' : 'the selected range';
+    }
+
+    function submitAutoSchedule(form) {
+      var label = prepareScheduleForm(form);
+      if (!label) return false;
       return confirm('Auto-schedule your unscheduled Approved posts across ' + label + '? This starts posting to Postiz in the background.');
+    }
+
+    function submitRescheduleAll(form) {
+      var label = prepareScheduleForm(form);
+      if (!label) return false;
+      return confirm(
+        'Reschedule ALL currently-scheduled posts across ' + label + '?\n\n' +
+        'This deletes their existing Postiz posts first, then re-sends them fresh at new times. ' +
+        'If you have more scheduled posts than time slots in this range, only the earliest-scheduled ones are touched.'
+      );
     }
 
     // Click-outside-to-close for every card's <dialog>.

@@ -127,7 +127,46 @@ class BrandKit(Base):
     # GET /integrations call just to know each channel's platform type.
     postiz_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     postiz_channels: Mapped[list] = mapped_column(JSONB, default=list)
+    # A second, non-Gmail content source: this brand's own GitHub PAT
+    # (same brand-override-falls-back-to-.env pattern, GITHUB_TOKEN) and
+    # which repos "Draft from GitHub" can pull README/changelog/commit
+    # grounding from - [{"full_name": "owner/repo", "private": bool}, ...],
+    # same live-fetch-then-checkbox shape as postiz_channels. A PAT is a
+    # static bearer token (not an OAuth-refresh flow like Gmail's), so it
+    # lives here rather than in OAuthCredential.
+    github_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_repos: Mapped[list] = mapped_column(JSONB, default=list)
+    # A third content source: an online store's own product catalog (see
+    # integrations/woocommerce/). Just the store's base URL - the
+    # WooCommerce Store API this reads from is public/unauthenticated (it's
+    # what powers the site's own cart), so unlike GitHub there's no token
+    # to store.
+    product_catalog_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # A fourth content source: RSS/Atom feeds - [{"url": "...", "name": "..."}, ...],
+    # manually entered (no discovery API like GitHub/WooCommerce have).
+    # Ingested continuously like Gmail (see integrations/rss/), not an
+    # on-demand picker like GitHub/Website.
+    rss_feeds: Mapped[list] = mapped_column(JSONB, default=list)
+    # "newsletter" (default, third-person article-summary voice),
+    # "personal" (first-person builder voice for posts about your own
+    # projects - see content_writer/prompts.py's SYSTEM_PROMPT_PERSONAL),
+    # or "product" (persuasive e-commerce copy for the catalog source above
+    # - SYSTEM_PROMPT_PRODUCT). Brand-level, not per-item, since only a
+    # brand dedicated to one of these sources would want the non-default
+    # voice.
+    content_voice: Mapped[str] = mapped_column(String(20), default="newsletter")
     logo_asset_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Uploading a logo doesn't force it onto every poster - this is the
+    # actual on/off switch add_brand_strip checks. Opt-in (default False).
+    show_logo_on_posters: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The only content Pillow/deterministic code is ever allowed to stamp
+    # onto a generated poster/reel is branding (this + the logo above) and
+    # source attribution below - never headline/quote/stat content, which
+    # is either AI-generated (image model / Veo) or not shown at all. Each
+    # of the three is independently optional; these two default True
+    # (preserves pre-existing behavior for brands that never touch this).
+    show_brand_name_on_posters: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_source_attribution: Mapped[bool] = mapped_column(Boolean, default=True)
     reference_image_paths: Mapped[list] = mapped_column(JSONB, default=list)
     tone_of_voice_prompt: Mapped[str] = mapped_column(Text, default="")
     default_language: Mapped[str] = mapped_column(String(20), default="en")
@@ -191,6 +230,36 @@ class AgentModelConfig(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)  # "anthropic"|"openai"|"google"
     model_id: Mapped[str] = mapped_column(String(150), nullable=False)
     params: Mapped[dict] = mapped_column(JSONB, default=dict)  # e.g. {"thinking_effort": "high"}
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AgentPromptConfig(Base):
+    """Per-brand override of a stage's full system prompt text - see
+    agents/prompt_registry.py's PROMPT_SLOTS for the fixed list of
+    overridable prompt_key values (one per distinct SYSTEM_PROMPT constant
+    across the pipeline - finer-grained than AgentModelConfig's agent_task,
+    since e.g. the Graphic Designer's three different creative-direction
+    system prompts all share one agent_task for model-routing/cost-logging
+    purposes but need independent prompt_key rows here). Unlike
+    AgentModelConfig, there's no NULL/global-default row - a brand with no
+    row here just uses the hardcoded default text from prompt_registry.py,
+    so brand_kit_id is required and (brand_kit_id, prompt_key) is a real
+    DB-level unique constraint. Full-text replacement (not append-only, by
+    explicit user decision) - a bad edit CAN break JSON-output parsing or
+    an image model's rendering instructions; "reset to default" (delete the
+    row) is the safety net, not a rules-preserving append mechanism."""
+
+    __tablename__ = "agent_prompt_config"
+    __table_args__ = (UniqueConstraint("brand_kit_id", "prompt_key", name="uq_agent_prompt_config_brand_key"),)
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    brand_kit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brand_kit.id"), nullable=False
+    )
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -301,6 +370,34 @@ class IngestedEmail(Base):
     )
 
 
+class IngestedRssItem(Base):
+    """One fetched RSS/Atom feed entry - the RSS equivalent of IngestedEmail,
+    same dedup-by-brand + status tracking, but each entry is already one
+    discrete article (no per-item "extract many articles" step needed, just
+    a niche-scoring pass - see agents/researcher/rss_angles.py)."""
+
+    __tablename__ = "ingested_rss_items"
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    brand_kit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brand_kit.id"), nullable=False, index=True
+    )
+    feed_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # RSS <guid>/Atom <id>, falling back to the entry's link if a feed omits
+    # it - the actual dedup key alongside brand_kit_id.
+    entry_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), default="")
+    link: Mapped[str] = mapped_column(String(1000), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="new")  # new|processed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("entry_id", "brand_kit_id", name="uq_ingested_rss_items_entry_brand"),
+    )
+
+
 class ContentItem(Base):
     """The shared pipeline record for ONE article/post-in-making - mirrors
     backend/agents/state.py's ContentItemState, which is checkpointed against
@@ -321,7 +418,14 @@ class ContentItem(Base):
     )
     stage: Mapped[str] = mapped_column(String(30), default="raw")
     format: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    language: Mapped[str] = mapped_column(String(20), default="en")
+    # Nullable, no "en" default at the column level - every read site
+    # already does `content_item.language or DEFAULT_LANGUAGE`, so this
+    # mirrors `format`'s "unset means unset" pattern rather than baking in
+    # a value that can't be told apart from an explicit choice (needed so
+    # a combined_drafting brand's own default_language doesn't stomp an
+    # explicit per-batch language override - see orchestrator.py's
+    # _analytical_node and routes_board.py's draft_from_website).
+    language: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
 
     # Set by the Researcher agent at extraction time
     article_title: Mapped[str] = mapped_column(String(500), default="")
@@ -364,11 +468,21 @@ class ContentItem(Base):
     # reel_editor/templates.py. Inferred by Content Writer, user-overridable
     # before generation, same pattern as poster_template.
     reel_template: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    # [{"type": "video", "description": "...", "narration": "..."}, or
-    # {"type": "text_card", "text": "...", "label": "..."}] - one per scene,
-    # built once by reel_editor's shot-listing step and reused on retry/
-    # regenerate. See reel_editor/prompts.py for the exact contract.
+    # [{"type": "video", "location": "host or scene", "description": "...",
+    # "narration": "..."}] - one per scene, built once by reel_editor's
+    # shot-listing step and reused on retry/regenerate. See
+    # reel_editor/prompts.py for the exact contract.
     reel_scenes: Mapped[list] = mapped_column(JSONB, default=list)
+
+    # Set by the Content Writer agent when format="carousel" - a multi-slide
+    # image post (4-6 poster-style slides sharing one background/art
+    # direction for visual consistency, see carousel_editor/graph.py).
+    # Mirrors reel_script/reel_scenes' contract exactly, just for stills.
+    carousel_script: Mapped[str | None] = mapped_column(Text, nullable=True)  # overall narrative arc
+    # [{"headline": "...", "body_text": "..."}] - one per slide, in order,
+    # built once by carousel_editor's shot-listing step. See
+    # carousel_editor/prompts.py for the exact contract.
+    carousel_slides: Mapped[list] = mapped_column(JSONB, default=list)
 
     # Set when a background task (currently only Reel Editor) fails; cleared
     # on the next successful attempt. Distinguishes "stage=drafted, genuinely
@@ -418,11 +532,16 @@ class MediaAsset(Base):
     content_item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("content_items.id"), nullable=False
     )
-    asset_type: Mapped[str] = mapped_column(String(30), nullable=False)  # "poster" | "reel" (Phase 3)
+    # "poster" | "reel" | "carousel_background" | "carousel_slide" | "product_photo" | "character_reference"
+    asset_type: Mapped[str] = mapped_column(String(30), nullable=False)
     storage_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
     generation_model: Mapped[str | None] = mapped_column(String(150), nullable=True)
     generation_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # Only meaningful for asset_type="carousel_slide" - preserves slide order
+    # (0-indexed) independent of created_at, since a regenerate could touch
+    # slides out of order. Null for every other asset_type.
+    slide_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

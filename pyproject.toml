@@ -29,6 +29,8 @@ dependencies = [
     "html2text>=2024.2",
     "pillow>=10.4",
     "google-genai>=1.0",
+    "feedparser>=6.0",
+    "boto3>=1.35",
 ]
 
 [project.optional-dependencies]

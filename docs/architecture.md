@@ -11,8 +11,9 @@ Gmail fetch (daily cron)
   -> Researcher extracts every article from the email (process_email, outside the graph)
   -> per suitable article: fetch_article -> analytical -> [INTERRUPT: review]
        -> content_writer -> [INTERRUPT: approve copy]
-            -> (poster format) graphic_designer -> [INTERRUPT: approve media] -> END
-            -> (reel format)   reel_editor      -> [INTERRUPT: approve media] -> END
+            -> (poster format)    graphic_designer -> [INTERRUPT: approve media] -> END
+            -> (reel format)      reel_editor      -> [INTERRUPT: approve media] -> END
+            -> (carousel format)  carousel_editor  -> [INTERRUPT: approve media] -> END
             -> (text_only format) END
        -> END (discard / write_myself at either gate)
 ```
@@ -55,6 +56,56 @@ The app moved from single-tenant (one implicit `BrandKit` row) to multi-brand-pe
 
 `backend/agents/languages.py`'s `LANGUAGE_CHOICES` is the fixed, validated set for generated content - English/Hindi/Marathi for now (same "bounded dropdown, not free text" reasoning as `graphic_designer/fonts.py`). Brand kit sets the default (`/brand-kit`); the analytical-review gate lets you override it per post when sending something to the Content Writer (`/board`'s "Needs Review" cards). Only the Content Writer's actual output (`copy_text`/`hashtags`/`poster_headline`/`reel_script`) is generated in the selected language - the Analytical agent's brief stays whatever language the model defaults to, since that's for your own reading, not the post. Verified live: both Hindi and Marathi produce natural, idiomatic copy, not literal translation.
 
+## Hindi/Marathi pre-generation text review
+
+AI-drafted Hindi/Marathi text quality isn't reliable enough yet (user-reported), so for these two
+languages, Content Review (`Stage.DRAFTED`) exposes the exact final text that will be spoken/rendered
+as directly editable, before Approve spends real image/video generation cost on it. English (or any
+other future language) keeps the original behavior untouched for poster/reel - nothing here changes
+their cost, latency, or UI. **Carousel is the one exception**: its slide-text edit form is available in
+every language, not just hi/mr - carousel wording often benefits from a human tweak regardless of
+language (a separate, later user request, not an AI-quality-specific problem like the other two
+formats).
+
+**The shot list is built earlier than usual.** Normally reel/carousel shot-listing (turning
+`reel_script`/`carousel_script` into per-scene narration or per-slide headline/body_text) only happens
+lazily, inside `generate_reel`/`generate_carousel`, at Approve time - there'd be nothing to edit at
+Content Review otherwise. `orchestrator.py`'s `_prebuild_shotlist_for_review` runs right after drafting
+(wired into `_content_writer_node`, `_analytical_node`'s combined-drafting branch,
+`send_to_content_review`, and `routes_board.py`'s `retry_content_writer` - every place an item can land
+at its content-review gate) and rebuilds `reel_scenes` (hi/mr only) / `carousel_slides` (every language)
+immediately. Best-effort: a failure here is logged and swallowed, not propagated - the item still
+reaches Content Review, just without a pre-built list to edit (same as before this existed; generation
+still builds one lazily as a fallback).
+
+**Editable fields, by format** (`routes_board.py`'s `edit-poster-content`/`edit-reel-scenes` routes are
+gated on `content_item.language in ("hi", "mr")`; `edit-carousel-slides` has no language gate; all three
+require `stage == Stage.DRAFTED`; board.html only renders each form under its matching condition):
+- **Poster** (hi/mr only): `poster_headline` + every `poster_content` field for the item's current
+  `poster_template` (a per-template form - `quote`'s `quote_text`/`attribution`/`citation`,
+  `fact_critique`'s up-to-3 `facts` pairs, etc., mirroring `POSTER_TEMPLATE_GUIDE`'s shapes). This is a
+  complete fix for posters specifically - nothing else transforms this text before it's handed to the
+  image model.
+- **Reel** (hi/mr only): only each scene's `narration` (the literal words Veo will speak) - a scene's
+  visual `description` is an English generation prompt regardless of the post's language, not
+  user-facing content text, so it stays read-only. `reel_script` itself also stays read-only context above the
+  editable list.
+- **Carousel** (every language): each slide's `headline`/`body_text` (the literal text the image model
+  will render) - `carousel_script` stays read-only context above the editable list.
+
+Saving an edit is a plain field update - no LLM call, no stage change, item stays at Content Review so
+the user can keep iterating or click Approve when satisfied. Approve does **not** re-run shot-listing
+(`_build_shotlist`/`_build_carousel_shotlist` both return the cached list unconditionally once
+non-empty) - generation uses the edited text exactly as saved. "Regenerate" still means what it always
+has app-wide: a full fresh AI redraft (re-running `_content_writer_node`/`_analytical_node`, which clears
+and rebuilds the shot list from the new script), discarding any manual edits - editing and regenerating
+are deliberately separate actions, not merged.
+
+**Known scope boundary**: the "add a format to an already-approved text_only post"
+bypass path (`generate_media`/`approve_and_generate_media`, see "Adding media to already-approved text
+content" below) does not stop at any review gate, so this editing step doesn't apply there - it still
+generates directly, same as every other language.
+
 ## Model routing
 
 `backend/app/llm/provider.py`'s `ChatProvider` resolves a model per `agent_task` from the `agent_model_config` table (seeded with sane defaults by `backend/scripts/seed_agent_models.py`), then calls it via LiteLLM so provider (Anthropic/OpenAI/Google) is just a config string. Every call is logged to `llm_call_log` with token counts and cost. The Content Writer uses Claude's server-side `web_search` tool for live hashtag relevance (falls back to a plain call if the tool call itself fails).
@@ -67,13 +118,17 @@ The app moved from single-tenant (one implicit `BrandKit` row) to multi-brand-pe
 
 **Content Writer is multi-provider, routed by language** (user-reported: Claude's Marathi writing quality wasn't good enough). `content_writer/graph.py`'s `_agent_task_for_language` picks `"content_writer_localized"` (GPT-5.4, per `DEFAULT_MODELS`) for `language` in `{"hi", "mr"}`, and the normal `"content_writer"` (Claude Opus 5) for everything else - same `agent_task`-keyed DB-override mechanism as everywhere else, so either can be repointed at a different model without a code change. The `web_search` tool is Anthropic-specific (would error against an OpenAI model), so it's only ever attached on the Claude path; the localized path uses a variant system prompt (`SYSTEM_PROMPT_LOCALIZED`) that asks for hashtags from the model's own knowledge instead of referencing a tool call that isn't there. Verified live: Marathi output reads as natural, idiomatic copy (not stilted/machine-translated), confirmed by inspecting real generated text.
 
+## No programmatic content text
+
+**App-wide policy**: Pillow/deterministic code never draws poster or reel CONTENT text - headline, quote, stat, caption. For posters, that content is either generated by the AI model itself or not shown at all. The only things code is still allowed to stamp on, and only as independently-optional per-brand toggles (`BrandKit.show_logo_on_posters`/`show_brand_name_on_posters`/`show_source_attribution` - the last of these now posters-only), are: branding (name + logo) and source attribution. This reversed two earlier, deliberate designs (a Devanagari-specific Pillow headline fallback, Pillow-rendered reel "text_card" scenes) in favor of trusting the image model, with a strict "render this verbatim, don't alter it" instruction wherever it's asked to reproduce exact text, and the Media Review approval gate (regenerate if wrong) as the accepted safety net - including the known, accepted risk that Gemini's image model renders Devanagari unreliably.
+
+**Reels are stricter still**: a third reversal - letting Veo render on-screen text itself - was tried and then reverted (see Video generation below) after a live test came back completely garbled with wrong framing. Reels now carry no on-screen text at all, in any language, and no closing card either (not even source attribution) - every fact/quote reaches the viewer through narration alone, or not at all.
+
 ## Image generation
 
-`backend/app/llm/image_provider.py`'s `GeminiImageProvider` generates the poster's background AND headline together via the Gemini Developer API (`gemini-2.5-flash-image`, ~$0.039/image, plain `GOOGLE_API_KEY`, no Vertex AI needed). Before that call, `graphic_designer/graph.py`'s creative-direction step (Sonnet 5, `agent_task="graphic_designer_direction"`) writes a specific, story-grounded prompt from the article's actual content, explicitly instructing the image model to render the exact headline as styled poster typography (different type treatment per story - condensed stencil, vintage travel-poster arc, etc.) - a fixed template wrapped around just the headline made every poster look the same regardless of subject, and a plain Pillow-drawn headline looked the same on every poster even once backgrounds varied.
+`backend/app/llm/image_provider.py`'s `GeminiImageProvider` generates the poster's background AND headline together via the Gemini Developer API (`gemini-2.5-flash-image`, ~$0.039/image, plain `GOOGLE_API_KEY`, no Vertex AI needed). Before that call, `graphic_designer/graph.py`'s creative-direction step (Sonnet 5, `agent_task="graphic_designer_direction"`) writes a specific, story-grounded prompt from the article's actual content, explicitly instructing the image model to render the exact headline, verbatim and unaltered, as styled poster typography (different type treatment per story - condensed stencil, vintage travel-poster arc, etc.) - a fixed template wrapped around just the headline made every poster look the same regardless of subject, and a plain Pillow-drawn headline looked the same on every poster even once backgrounds varied.
 
-**Deliberate trade-off** (user-confirmed): this means the image model, not Pillow, is what actually renders the headline when a provider is configured and the headline is Latin-script (English) - a departure from the original plan's "no image model ever re-renders approved text" rule, traded for real per-poster visual variety. Nano Banana-family models are good at verbatim Latin text rendering but not guaranteed; the Media Review approval gate (where you see the finished poster before it goes anywhere) is the safety net - Regenerate if the text comes out wrong.
-
-**Devanagari (Hindi/Marathi) headlines are handled differently**, found by actually testing one: the image model renders Devanagari as garbled, wrong conjuncts/matras - not just occasionally off, systematically wrong. So `graphic_designer/graph.py` checks `fonts.py`'s `contains_devanagari(headline)` and, when true, asks the image model for a **background-only** image (`prompts.py`'s `SYSTEM_PROMPT_BACKGROUND_ONLY`, no text-rendering instruction at all) and has Pillow draw the headline on top instead, using the vendored Noto Sans Devanagari font (none of the four brand-kit fonts have Devanagari glyphs - verified by rendering with each and getting `.notdef` tofu boxes). English headlines keep the full AI-rendered-typography path. Either way, the poster text is never generated/paraphrased by an LLM - it's always the exact `poster_headline` string the Content Writer produced and the user approved, only the *rendering method* (image model vs Pillow) differs by script. `layout.py`'s `render_fallback_poster` now accepts an optional AI-generated background, so it covers both "no image provider at all" and "image provider, but Pillow still draws the text" in one function. Fonts are a fixed, vendored set (`graphic_designer/fonts.py`, `.ttf` files under `app/static/fonts/`) selectable from a dropdown - brand kit can't specify an arbitrary font name since there'd be no file to render it with; Devanagari substitution overrides that dropdown automatically since it's a glyph-coverage requirement, not a style choice.
+This applies in every script, including Devanagari (Hindi/Marathi) - live testing found the image model renders Devanagari as garbled, wrong conjuncts/matras, but per the no-programmatic-content-text policy above, that's an accepted risk rather than a reason to fall back to a Pillow-drawn headline. The Media Review approval gate (where you see the finished poster before it goes anywhere) is the safety net - Regenerate if the text comes out wrong. If there's no image provider configured, or the AI call fails, `layout.py`'s `render_fallback_poster` produces background (a neutral gradient, since there's no successful AI image to show text from) + brand strip only - no headline text, ever. Fonts are a fixed, vendored set (`graphic_designer/fonts.py`, `.ttf` files under `app/static/fonts/`) selectable from a dropdown, still relevant for the brand strip's own text (name/handles) and the Devanagari-capable subset used there.
 
 ## Poster templates
 
@@ -81,25 +136,45 @@ The app moved from single-tenant (one implicit `BrandKit` row) to multi-brand-pe
 
 The Content Writer infers the best-fitting `poster_template` and produces matching `poster_content` alongside the existing `poster_headline`/`copy_text` (see `content_writer/prompts.py`'s `POSTER_TEMPLATE_GUIDE`, interpolated into both the normal and format-only system prompts). The user can override the inferred template from the "drafted" card's modal (`POST /board/{id}/poster-template`) before generation - `poster_content` itself isn't regenerated, only which layout it's rendered into.
 
-**Templated posters are now freely designed by the image model, not Pillow** (user-confirmed trade-off, reversing the original per-template plan): `graphic_designer/graph.py`'s `generate_poster`, for any item with a known `poster_template` and non-empty `poster_content`, calls `_craft_full_design_prompt` (Sonnet 5, `agent_task="graphic_designer_direction"`, using `prompts.py`'s `SYSTEM_PROMPT_FULL_DESIGN` + `templates.py`'s `TEMPLATE_MOODS`) to write a prompt handing the image model every text field for that template plus a mood description, then generates the **complete** poster - background, layout, and all typography - via `ImageGenProvider.generate_full_design`. The prompt deliberately carries no "render this verbatim, don't alter it" instruction; the model composes the given text into the design however it judges best. This applies in every language including Devanagari - the known Gemini-image-model Devanagari-accuracy problem (see below) is an accepted risk here, not worked around, since all of the user's real sample posters are Marathi and a deterministic fallback would defeat the point of freely-styled design. The Media Review approval gate (regenerate on a bad result) is the safety net, same as the English AI-text path below.
+**Templated posters are freely designed by the image model, not Pillow**: `graphic_designer/graph.py`'s `generate_poster`, for any item with a known `poster_template` and non-empty `poster_content`, calls `_craft_full_design_prompt` (Sonnet 5, `agent_task="graphic_designer_direction"`, using `prompts.py`'s `SYSTEM_PROMPT_FULL_DESIGN` + `templates.py`'s `TEMPLATE_MOODS`) to write a prompt handing the image model every text field for that template plus a mood description, then generates the **complete** poster - background, layout, and all typography - via `ImageGenProvider.generate_full_design`. The prompt instructs the model to render each text field verbatim and unaltered. This applies in every language including Devanagari - same accepted-risk reasoning as above. There is no deterministic per-template Pillow fallback any more (the old `poster_render.py` was deleted): if there's no image provider, or the full-design call fails, the poster falls back to background + brand strip only, same as the legacy single-headline path.
 
-`backend/agents/graphic_designer/poster_render.py`'s `RENDERERS` (one deterministic Pillow layout per template, each vertically centering its measured text blocks above the brand strip) is now only the **fallback**: used when no image provider is configured, or the full-design call fails/errors. Legacy items with no `poster_template`/`poster_content` saved are unaffected and keep going through the original single-headline path below.
+Product-photo posters (WooCommerce source) skip the AI call entirely - the real product photo IS the product being sold, and no AI model can reproduce an exact print/design anyway - so `generate_poster` just composites the real photo + brand strip + source line, with no caption overlay at all. Stays free.
 
-`backend/app/llm/image_provider.py` exposes two Gemini models: `IMAGE_MODEL_STANDARD` (`gemini-2.5-flash-image`, $0.039/image) for background-only art where no text needs to be accurate (the legacy single-headline path below, and Reel Editor character references), and `IMAGE_MODEL_PRO` (`gemini-3-pro-image`, "Nano Banana Pro", ~$0.134/image at 1K/2K per ai.google.dev's pricing page, confirmed Sept 2026) for `generate_full_design` - Google's higher-fidelity, better-text-rendering tier, used specifically because the full-design path needs the model to get real words right, not just compose a scene.
+`backend/app/llm/image_provider.py` exposes two Gemini models: `IMAGE_MODEL_STANDARD` (`gemini-2.5-flash-image`, $0.039/image) for the legacy single-headline path and Reel Editor character references, and `IMAGE_MODEL_PRO` (`gemini-3-pro-image`, "Nano Banana Pro", ~$0.134/image at 1K/2K per ai.google.dev's pricing page, confirmed Sept 2026) for `generate_full_design` - Google's higher-fidelity, better-text-rendering tier, used specifically because the full-design path needs the model to get real words right, not just compose a scene.
+
+## Carousels (Carousel Editor)
+
+A third post format alongside poster/reel - a set of 4-6 still images (`MediaAsset.asset_type="carousel_slide"`, ordered by `slide_index`) telling one complete story, meant to be swiped through in order. Structured like Reel Editor (script -> shot list -> per-unit generation), not like the six poster templates - each slide is a uniform `{"headline": ..., "body_text": ...}` shape, not tied to `quote`/`tribute`/etc.
+
+**Script and slide count**: Content Writer writes `carousel_script` (a narrative arc, same shape as `reel_script`) alongside the normal copy fields when `format="carousel"` (`content_writer/prompts.py`'s `CAROUSEL_GUIDE`). `carousel_editor/graph.py`'s `_build_carousel_shotlist` (Sonnet 5, `agent_task="carousel_shotlist"`) then breaks that script into an ordered list of slides, **LLM-decided within 4-6** based on how much the story actually needs (not a fixed count) - a defensive cap at 6 guards a misbehaving model, but the prompt's own instruction is the real enforcement.
+
+**Visual consistency across slides comes from generation mechanics, not prompt wording alone**: `generate_carousel` first generates one shared background image (no text at all, cached as `asset_type="carousel_background"` so a retry after a partial failure reuses it rather than regenerating a visually different one), then produces each slide by editing a copy of that same background via `ImageGenProvider.generate_full_design(reference_image=<shared background>)` - the same reference-image-editing mechanism product-photo posters use to preserve a real photo, repurposed here to preserve a shared AI-generated background instead. Each slide's prompt only ever asks for that slide's own headline/body_text to be composed on top, never a new scene - one consistent art style/palette across the whole set is the actual lever, not just asking each slide to "look similar."
+
+**Text placement is pinned to a fixed zone, not left to each slide's own judgment** (found live: early slides put text in different places - some in a clean top band, one spilling onto busy artwork with poor contrast - since each slide's creative-direction prompt is an independent LLM call with no shared layout constraint). `SYSTEM_PROMPT_BACKGROUND` now reserves one deliberate, clearly-bounded calm text zone in the top ~30-35% of the frame; `SYSTEM_PROMPT_SLIDE` instructs every slide to confine its headline/body text to that exact same zone and never repaint/re-crop the shared background. This is what actually produces aligned, template-like consistency across a set, not just a shared background alone.
+
+**Sequence indicator, AI-drawn**: each slide also renders a small page-counter in the text zone's top-right corner - `"{slide_number}/{slide_count}"`, followed by a right-pointing arrow on every slide except the last (which shows just the number, no arrow) - so swiping reads as a connected sequence with a clear end. Drawn by the image model itself in the same call as the headline/body text (not Pillow-stamped) - a deliberate accepted-risk choice (matches the app's general "AI draws content text" policy) in exchange for a page-counter that's visually native to each slide's art style, rather than a bolted-on deterministic badge.
+
+**Same no-programmatic-content-text policy as posters/reels**: each slide's headline/body_text (and the sequence indicator) is rendered by the image model itself, verbatim, or not shown at all - Pillow only ever stamps branding (`add_brand_strip`) and source attribution (`add_source_line`), applied identically to every slide.
+
+**Error-handling policy** (mirrors `generate_poster`'s product-photo branch): the shared background generation failing propagates (nothing to fall back to - a carousel of blank branded cards would silently look finished but isn't); an individual slide's reference-image edit failing after the background succeeded is a soft failure, falling back to just that one slide being the shared background + brand strip rather than discarding the whole carousel over one bad slide.
+
+**Sends**: Botsab has no multi-image/album API at all (confirmed reading its source) - `botsab/send.py` sends a carousel as a plain sequence of separate image messages, the full caption attached to the first slide only. Postiz's `image: [...]` wire format already accepted a list - `postiz/send.py` now uploads every slide into it for a real, native multi-image post, no schema change needed on Postiz's side. Both send paths group `MediaAsset` rows by "newest asset per `slide_index`" (a regenerate inserts a fresh full set of rows) rather than trusting insertion order.
 
 ## Video generation (Reel Editor)
 
-`backend/app/llm/video_provider.py`'s `GeminiVideoProvider` generates each ~8s scene via Veo on the same Gemini Developer API key. Three tiers, chosen per generation via a board-level selector (`reel_editor/graph.py`'s `get_video_model_key`/`set_video_model_key`, `SyncState`-backed like the cost cap): `veo-3.1-lite-generate-preview` (default, $0.08/sec 1080p), `veo-3.1-fast-generate-preview` (fast, $0.12/sec 1080p - pricing confirmed directly off ai.google.dev's official pricing page, not a live 400/200 test), and `veo-3.1-generate-preview` (standard, $0.40/sec, 5x lite). Three things about the Lite tier are confirmed via live 400 errors, not documentation - it rejects `reference_images` (Veo's subject-consistency feature), `negative_prompt`, and the whole SDK rejects `generate_audio` on the Gemini Developer API surface entirely (audio is generated unconditionally regardless - confirmed by a clip having an AAC track despite the code never requesting one). The Fast tier is treated the same as Lite for `reference_images`/`negative_prompt` purely out of caution (another preview-tier model, not separately confirmed) - the code only special-cases Standard as the one confirmed to accept `negative_prompt`. Consequences:
-- **Character consistency** comes from (a) chaining a starting image through `generate_scene`'s `starting_image` param (the character reference image for scene 1, the previous clip's last frame - extracted via ffmpeg - for scene 2+, only across consecutive "video" scenes, not through a text_card) and (b) the shot-listing step repeating the character description verbatim in every scene's prompt.
-- **Suppressing invented on-screen text** (Veo garbles text/subtitles it invents unprompted, in every language - a documented Veo issue, not Devanagari-specific) uses the dedicated `negative_prompt` config field only on the Standard tier; on Lite the same constraint is folded into the prompt text itself as a plain-language suffix (`generate_reel`'s per-scene prompt composition) - weaker, but combined with the shot-listing prompt never describing legible text/signage in a scene to begin with.
+`backend/app/llm/video_provider.py`'s `GeminiVideoProvider` generates each ~8s scene via Veo on the same Gemini Developer API key. Three tiers, chosen per generation via a board-level selector (`reel_editor/graph.py`'s `get_video_model_key`/`set_video_model_key`, `SyncState`-backed like the cost cap): `veo-3.1-lite-generate-preview` (lite, $0.08/sec 1080p), `veo-3.1-fast-generate-preview` (fast, **the default** as of Sept 2026 - $0.12/sec 1080p, bumped from lite after a user-reported quality complaint - pricing confirmed directly off ai.google.dev's official pricing page, not a live 400/200 test), and `veo-3.1-generate-preview` (standard, $0.40/sec, 5x fast). Three things about the Lite tier are confirmed via live 400 errors, not documentation - it rejects `reference_images` (Veo's subject-consistency feature), `negative_prompt`, and the whole SDK rejects `generate_audio` on the Gemini Developer API surface entirely (audio is generated unconditionally regardless - confirmed by a clip having an AAC track despite the code never requesting one). The Fast tier is treated the same as Lite for `reference_images`/`negative_prompt` purely out of caution (another preview-tier model, not separately confirmed) - the code only special-cases Standard as the one confirmed to accept `negative_prompt`. Consequences:
+- **Character consistency** comes from (a) chaining a starting image through `generate_scene`'s `starting_image` param (the character reference image for scene 1, the previous clip's last frame - extracted via ffmpeg - for scene 2+, only across consecutive scenes) and (b) the shot-listing step repeating the character description verbatim in every scene's prompt.
+- **On-screen text is suppressed, permanently** - a brief attempt at letting Veo render on-screen text itself (per the no-programmatic-content-text policy) was reverted after a live test on a real reel (a Tamil Nadu factory-deaths story): the on-screen Devanagari came back completely garbled (not just imperfect - nonsense glyphs), and the scene was composited inside a bordered "poster"-style box instead of full-bleed video. `DEFAULT_NEGATIVE_PROMPT` (`video_provider.py`) again carries `"subtitles, captions, on-screen text, written words, watermark, garbled text"`, the per-scene "(no on-screen text...)" prompt suffix is back, and `reel_editor/prompts.py`'s shot-listing prompt never asks for on-screen text at all - every fact/quote/stat is carried through narration only, in every language.
 - **`RESOURCE_EXHAUSTED` (429) errors don't necessarily mean depleted billing** - user-confirmed live that account credits were available when this fired; `veo-3.1-lite-generate-preview` being a *preview* model most likely carries its own per-day/per-minute request cap independent of credit balance. `generate_reel` catches this and points at https://ai.dev/rate-limit rather than assuming billing.
 - **A prompt Google's Responsible AI (RAI) safety filter rejects comes back as a "successful" operation** (`operation.error` empty) but with `response.generated_videos` left `None` - this previously crashed as a bare `'NoneType' object is not subscriptable` with zero indication of why, found live on a real caste-discrimination story (exactly the kind of real-world social-conflict subject matter this app's niche content leans on, and safety filters are more likely to flag). `generate_scene` now checks for this explicitly and surfaces `response.rai_media_filtered_reasons` (a real field on the SDK's `GenerateVideosResponse` type) so a rejected prompt is diagnosable instead of looking like an app bug.
 
-**Reel templates + real content grounding** (`reel_editor/templates.py`): three types - `explainer_influencer` (consistent on-camera presenter), `faceless` (voiceover over B-roll, no character), `animated_contextual` (illustrated/motion-graphic style) - confirmed via research as a real, recognized short-form-video framework, not invented. Content Writer infers `reel_template` the same way it infers `poster_template` (user-overridable on the board). Rather than sourcing real photos or article screenshots (rejected per user direction - article images can be generic/abstract, and screenshot scraping is more moving parts than it's worth), reels ground themselves in real article content via **text_card scenes** (`reel_editor/text_card.py`): a Pillow-rendered still, verbatim quote/stat from the article plus a "Source: {platform}" line (same attribution convention and font pipeline as posters - see `agents/source_attribution.py`, shared by both), converted to a short silent-but-audio-track-present clip via ffmpeg so it concatenates cleanly with Veo's audio-bearing clips. Free (no API cost), never counted against the reel cost cap, and - critically - renders Devanagari correctly where Veo cannot, verified live in Marathi (correct conjuncts/matras/numerals).
+**Reel templates** (`reel_editor/templates.py`): three types - `explainer_influencer` (consistent on-camera presenter), `faceless` (voiceover over B-roll, no character), `animated_contextual` (illustrated/motion-graphic style) - confirmed via research as a real, recognized short-form-video framework, not invented. Content Writer infers `reel_template` the same way it infers `poster_template` (user-overridable on the board). Every scene is a Veo-generated clip - there's no Pillow-rendered scene type at all (the old `text_card` scene type and `reel_editor/text_card.py` were removed entirely, including its later-added closing source-attribution card - reels carry zero programmatic content, not even source credit). Where the article has a real, quotable line or striking statistic, the shot-lister folds it into narration only - never on-screen text (see above).
 
-**Voiceover via Veo's native audio, English only** (`reel_editor/prompts.py`): the shot-listing step writes a short narration line per video scene, composed into the final Veo prompt as `A narrator says: "..."`. Confirmed live at no extra cost (Veo's per-second price already includes audio). Hindi/Marathi narration is deliberately NOT attempted yet - Veo's spoken Devanagari-language quality is unverified, so `hi`/`mr` reels get silent/ambient video scenes and lean on more text_card scenes instead (`SYSTEM_PROMPT_LOCALIZED`) until that's tested. The actual spoken-audio quality of the English path itself is also not yet verified end-to-end - live testing kept hitting `RESOURCE_EXHAUSTED` (429) on Veo calls. **Not a depleted-credits issue** (user confirmed live that account credits were available) - `veo-3.1-lite-generate-preview` is a preview model, and this is most likely its own per-day/per-minute request cap rather than billing. `generate_reel` (`reel_editor/graph.py`) now catches this specifically and surfaces a clear message pointing at https://ai.dev/rate-limit instead of Google's raw JSON error, and treats it like the cost cap - stops generating further scenes but keeps whatever already rendered (including free text_card scenes) rather than discarding a partial reel. The request format itself is confirmed correct (no API validation errors on a real call), just not the audio output quality.
+WooCommerce-sourced (product) reels go through this same pipeline, not a shortcut - the real product photo (if any) is passed in as the first scene's `starting_image`, the same continuity mechanism used for the character reference, grounding Veo's generation in the real product visually without hard-requiring it (Veo may still not reproduce the exact print - known, accepted trade-off, same reasoning as product posters above).
 
-`backend/agents/reel_editor/graph.py`'s `generate_reel` orchestrates: shot-listing (Sonnet 5, `agent_task="reel_shotlist"`, script + reel_template + real article text -> 2-4 "video" scenes plus 1-2 "text_card" scenes) -> character reference image (Gemini image gen, skipped for faceless posts with no character) -> per-scene generation, dispatched by scene type, **checking the configured cost cap before each video scene and stopping generation (not failing) once the next one would exceed it** (text_card scenes are always free and never counted) -> `app/ffmpeg/stitch.py` concatenates clips (stream-copy, falls back to re-encode if codecs don't match). Cap defaults to $2.50/reel, editable on the board.
+**Voiceover via Veo's native audio, every language** (`reel_editor/prompts.py`): the shot-listing step writes a short narration line per scene, composed into the final Veo prompt as `A narrator says: "..."`. Confirmed live at no extra cost (Veo's per-second price already includes audio). hi/mr reels get narration written in Devanagari script (`SYSTEM_PROMPT_LOCALIZED`) and spoken by Veo directly - UNVERIFIED quality end-to-end, accepted per explicit user request rather than falling back to silent scenes or Pillow-rendered cards. The actual spoken-audio quality of the English path itself is also not yet verified end-to-end - live testing kept hitting `RESOURCE_EXHAUSTED` (429) on Veo calls. **Not a depleted-credits issue** (user confirmed live that account credits were available) - `veo-3.1-lite-generate-preview` is a preview model, and this is most likely its own per-day/per-minute request cap rather than billing. `generate_reel` (`reel_editor/graph.py`) now catches this specifically and surfaces a clear message pointing at https://ai.dev/rate-limit instead of Google's raw JSON error, and treats it like the cost cap - stops generating further scenes but keeps whatever already rendered rather than discarding a partial reel. The request format itself is confirmed correct (no API validation errors on a real call), just not the audio output quality.
+
+`backend/agents/reel_editor/graph.py`'s `generate_reel` orchestrates: shot-listing (Sonnet 5, `agent_task="reel_shotlist"`, script + reel_template + real article text -> 2-8 scenes) -> character reference image (Gemini image gen, skipped for faceless posts with no character) -> per-scene Veo generation, **checking the configured cost cap before each scene and stopping generation (not failing) once the next one would exceed it** -> `app/ffmpeg/stitch.py` stitches clips with loudness-normalized audio and a short (0.4s) crossfade between consecutive scenes (`xfade`+`acrossfade`), falling back to a plain hard-cut concat (stream-copy, or a re-encode if codecs don't match) if the crossfade filter_complex build fails. Cap defaults to $8.00/reel (enough for a full 8-scene reel at the fast or lite tier), editable on the board. No closing card of any kind - `BrandKit.show_source_attribution` only affects posters now.
 
 ## Per-card cost tracking
 
@@ -115,7 +190,7 @@ Two requested fonts are deliberately **not** vendored: **Mangal** is a proprieta
 
 `add_brand_strip` (in `graphic_designer/layout.py`) draws real platform icon glyphs next to each handle - Instagram, Facebook, X, YouTube, TikTok, and a globe for the website - instead of spelling out platform names. Icons come from Font Awesome 6 Free (`app/static/fonts/fa-brands-400.ttf`, `fa-solid-900.ttf`; icons CC BY 4.0, font SIL OFL). Codepoints were confirmed by inspecting the fonts' cmap with `fontTools` and rendering each one, not guessed from documentation.
 
-**Logo**: `brand_kit.logo_asset_path` (uploaded via `/brand-kit/logo`, stored through the same `StorageBackend` as generated media) is composited into the strip's left edge by `add_brand_strip` - alpha-masked, resized to fit the strip height, with the text-segment centering logic shrinking its available width to leave room for it rather than overlapping. `graphic_designer/graph.py`'s `generate_poster` loads the logo bytes before calling any of the three strip-drawing paths (`add_brand_strip` directly, the per-template `RENDERERS`, or `render_fallback_poster`) and passes them through as `logo_bytes`; a brand with no logo renders exactly as before (the param defaults to `None` everywhere in the chain). Reel end-cards have no brand-strip mechanism at all yet, so logo-in-reel is still out of scope.
+**Logo**: `brand_kit.logo_asset_path` (uploaded via `/brand-kit/logo`, stored through the same `StorageBackend` as generated media) is composited into the strip's left edge by `add_brand_strip` - alpha-masked, resized to fit the strip height, with the text-segment centering logic shrinking its available width to leave room for it rather than overlapping. `graphic_designer/graph.py`'s `generate_poster` loads the logo bytes before calling either strip-drawing path (`add_brand_strip` directly, or via `render_fallback_poster`) and passes them through as `logo_bytes`; a brand with no logo renders exactly as before (the param defaults to `None` everywhere in the chain). Logo and brand name are independently toggleable (`show_logo_on_posters`/`show_brand_name_on_posters`) and no longer mutually exclusive - both can render together. Reels have no brand-strip mechanism and no closing card of any kind - nothing programmatic is ever composited onto a reel.
 
 ## Adding media to already-approved text content
 
@@ -141,6 +216,15 @@ Two independent layers, at two different points in the pipeline:
 - **Never process the same fetched-but-not-yet-processed email twice** (`orchestrator.py`'s `process_email`): found live as a real gap, not hypothetical - `IngestedEmail.status` used to only flip `"new"` -> `"processed"` at the very end, after `extract_articles` (an LLM call) and every `ContentItem` insert had already happened. Two overlapping calls for the same email - the 06:00 scheduled fetch racing a manual "Fetch now" click, or clicking "Fetch now" again before the first click's backgrounded run had gotten far enough to flip the status - would both see `status="new"` and both run the Researcher, creating **duplicate `ContentItem`s and duplicate LLM cost** for the same newsletter. Fixed with an atomic claim: `process_email` now does `UPDATE ingested_emails SET status='processing' WHERE id=... AND status='new'` *before* any work, checks the row was actually claimed (`rowcount`), and bails out immediately (returns `[]`, logs it) if another run got there first - only the winner proceeds to `extract_articles`.
   - **Restart risk, same shape as the reel `is_processing` bug below**: an email stuck at `"processing"` (process killed mid-run - crash, or a `--reload` restart in dev) would never be picked up again, since `fetch_pending_email_ids`'s backlog sweep only queries `status="new"`. `main.py`'s `recover_orphaned_email_claims`, run on every boot alongside `recover_orphaned_processing_items`, resets any `"processing"` email back to `"new"` - safe unconditionally, since nothing survives a process restart, so there's no chance one is actually still running.
 
+## RSS feeds (fourth content source)
+
+Alongside Gmail, GitHub, and WooCommerce - `BrandKit.rss_feeds` is a manually-entered list (no discovery API exists for arbitrary feed URLs the way GitHub/WooCommerce have one). Ingested the same way as Gmail (continuous stream, not an on-demand picker like GitHub/Website), since a feed is fundamentally a stream of new items over time:
+
+- `integrations/rss/client.py`'s `fetch_feed` wraps `feedparser` (handles RSS 2.0 and Atom transparently) into a plain list of `{entry_id, title, link, summary, published_at}` dicts - `entry_id` is the feed's own `<guid>`/`<id>`, falling back to the link for feeds that omit one.
+- `integrations/rss/fetch.py`'s `fetch_new_items` dedups against `ingested_rss_items` per `(entry_id, brand_kit_id)` (same per-brand-not-global uniqueness reasoning as `ingested_emails` - `UniqueConstraint` there too), one feed failing (dead URL, malformed XML) doesn't block the others.
+- Unlike Gmail's per-email extraction (one email can hold many embedded articles, so each needs its own LLM call to find them), RSS entries are already discrete - `researcher/rss_angles.py`'s `extract_angles` scores a whole batch of newly-fetched entries against the niche in **one** LLM call, cheaper than one call per entry. `orchestrator.py`'s `process_rss_batch` mirrors `process_email`'s atomic claim-before-work race guard (`status: new -> processing`) and hands the scored batch to the same `create_content_items` every other source uses.
+- Same orphaned-claim recovery as email (`main.py`'s `recover_orphaned_rss_claims`, run on every boot) and same daily-schedule pattern (`worker/scheduler.py`'s `_daily_rss_fetch_job`, 06:15 - just after Gmail's 06:00), plus a manual "Fetch RSS" button on the board (only shown once a brand has at least one feed configured).
+
 ## Format switching and the LangGraph checkpoint
 
 `routes_board.py`'s `generate_media`/`approve_and_generate_media` routes (the "Generate poster instead" / "Generate reel instead" buttons on a Media Review card) change `content_item.format` directly in Postgres, bypassing the graph entirely - this item already reached its `media_review` interrupt or `END`, so there's no pending interrupt to resume into. But the graph's *own* checkpointed state carries its own copy of `format`, last set whenever `content_review_gate` ran, and `_route_after_media_review` (what a **Regenerate** click actually goes through) reads that checkpointed value, not the DB column. Found live: switching a reel to a poster, then clicking Regenerate, silently regenerated *more reels* - burning real Veo cost each time - because the checkpoint never learned about the switch, even though `content_item.format` in the DB correctly said "poster" the whole time. Fixed with `orchestrator.py`'s `sync_format_to_graph_state(content_item_id, format)`, called right after every out-of-graph format change, which does `graph.update_state(config, {"format": format})` to keep the checkpoint in sync - best-effort (logs, doesn't raise, since the DB-side change already succeeded regardless).
@@ -155,13 +239,108 @@ Every board action that runs an LLM/image/video/network call is backgrounded (`a
 
 **Retrying a failed slow step bypasses the graph, like retry_reel always has** - once a LangGraph node raises mid-flight, its checkpoint isn't cleanly resumable via `Command(resume=...)` anymore (confirmed empirically, not just inferred), so `retry-content-writer`/`retry-poster`/`retry-reel` each call the underlying function (`write_copy`/`generate_poster`/`generate_reel`) directly and set `stage` themselves. `board.html`'s generic error block picks the right one from `content_item.stage`/`format` alone (no separate tracking field needed): `stage=analyzed` failed inside content_writer, `stage=drafted`/`media_generated` failed inside graphic_designer/reel_editor depending on `format`.
 
+## Bulk actions and discarded-data retention
+
+**Discard all** (`routes_board.py`'s `discard_all`) mirrors `approve_all` exactly - same column scope
+(wherever "Approve all" appears: `analyzed`/`drafted`/`media_generated`), same per-item dispatch via
+`resume_content_item(decision="discard")` so each item's pending graph interrupt is resolved properly
+(not a direct `stage=DISCARDED` write, which only applies to `researched`/`approved` cards with no
+pending interrupt - see `discard`'s own docstring). Always synchronous - discard never enters a slow
+node (`_decide_enters_slow_node`), so unlike `approve_all` there's no background-dispatch branch to
+mirror.
+
+**Discarded items are deleted for good after a configurable retention window** (default 2 days,
+per-brand, `SyncState`-backed like the reel cost cap - `worker/cleanup.py`'s
+`get_retention_days`/`set_retention_days`, editable on the board's Settings panel, 0 opts a brand out
+entirely). A daily cron job (`worker/scheduler.py`'s `_daily_discarded_cleanup_job`, 06:30, alongside the
+Gmail/RSS fetch jobs) sweeps every brand's `DISCARDED` items against its own window
+(`content_item.updated_at`, auto-refreshed on the stage transition into `DISCARDED`, stands in for "when
+it was discarded" - good enough without a dedicated timestamp column) and permanently deletes each one:
+its stored media files, then every table with a `content_item_id` FK (`MediaAsset`, `LlmCallLog`,
+`ContentItemVersion`, `PostizPost`), then the `ContentItem` row itself.
+
+**No ORM `relationship()` exists anywhere in this schema** (every table here uses a plain FK column, not
+a mapped relationship) - found live: deleting a child row and its parent `ContentItem` in the same
+`session.flush()` via individual `db.delete()` calls hit a real `ForeignKeyViolation` on every single
+discarded item that had a `MediaAsset`, because SQLAlchemy has no relationship-based dependency info to
+auto-order cross-table deletes within one flush without it, and emitted `DELETE FROM content_items`
+before `DELETE FROM media_assets`. `worker/cleanup.py::_delete_content_item` sidesteps this entirely by
+using bulk `.filter(...).delete()` calls for every child table (each executes immediately, not deferred
+to a later flush) before deleting the parent row - confirmed no such gap remains by testing the exact
+FK-violation scenario directly (a discarded item with a real `MediaAsset` row) after the fix.
+
+## Auto-schedule concurrency guard
+
+`routes_board.py`'s `auto_schedule`/`reschedule_all` each run as one sequential background job, paced
+at `_AUTO_SCHEDULE_ITEM_DELAY_SECONDS` (240s) per item to stay gentle on Postiz's rate limit - a batch
+of 20+ items can legitimately take well over an hour to finish. **Found live on a real brand
+(Janata Weekly)**: nothing stopped a second (or third) click of "Auto-schedule" while an earlier click's
+job was still slowly working through its list - each click's own redirect message ("Scheduling N
+post(s) in the background") doesn't make clear the job could take an hour+, so a second click reads as
+a reasonable retry. Each job computes its own snapshot of "which Approved items still need
+scheduling" at start time, so a second job started before the first had caught up genuinely
+double-scheduled the same items - two items ended up with duplicate `PostizPost` rows (one even with 4
+rows - two full channel-pairs at two different times), which would have posted to Instagram/Facebook
+twice each once those scheduled times arrived. Cleaned up after the fact by cancelling the redundant
+rows via `PostizClient.delete_post` (same call the individual per-post Cancel button uses) - confirmed
+every scheduled item ended up with exactly one row per configured channel.
+
+**Fixed with a per-brand lock**: a `SyncState` row (`schedule_job_lock`, brand-scoped) is set before
+either background job starts and cleared in a `finally` once it finishes. `_schedule_job_already_running`
+gates both routes - a second attempt while the lock is fresh gets a clear "already running, wait for it
+to finish" redirect instead of silently starting a duplicate job. The lock has a 2-hour staleness window
+(`_SCHEDULE_LOCK_STALE_SECONDS`) for the case where the *process* dies mid-job (a crash, or a
+`--reload` restart) - background threads don't survive that, so a lock left behind is guaranteed
+orphaned, not genuinely still running; `main.py`'s `recover_orphaned_schedule_locks` also sweeps every
+lock unconditionally on every boot, same "nothing survives a restart" reasoning as
+`recover_orphaned_processing_items`, so a fresh boot doesn't even need to wait out the staleness window.
+
 ## Auto mode
 
 `agents/auto_mode.py` + `orchestrator.py`'s `auto_advance_content_item` - for items whose `priority_score` clears a configurable threshold, auto-resumes the `analytical_review` gate (`send_to_content_writer`, using the brand's `default_language`), once that lands at `content_review` auto-resumes that too (`approve`), and - per an explicit user decision to extend past generation-only - once that lands at `media_review` auto-resumes that too (`approve`), landing at APPROVED with zero clicks. If the separate `auto_send` toggle is also on, landing at APPROVED this way additionally triggers an actual WhatsApp send (`integrations/botsab/send.py`'s `send_content_item`, the same call the manual "Send via WhatsApp" button uses) - a failure there is caught and written to `last_error` rather than raised, so a bad send doesn't look like a silent no-op. `auto_send` defaults off and is independent of `enabled`, specifically so flipping on auto-approve for an existing setup doesn't also start blasting WhatsApp messages without a separate explicit opt-in - **this means nothing is reviewed by a human before it goes out** once both are on, a deliberate change from the original media-review-is-always-manual design (see git history / conversation record for that tradeoff being made knowingly). Settings (`enabled`, `min_score`, `format`, `auto_send`) live in the same `SyncState` key/value table as the reel cost cap and Gmail search query. Called from two places: `process_email`'s per-item loop (so newly-fetched items auto-advance immediately) and `routes_board.py`'s `/board/auto-mode` route, which - only on the enabled:false→true transition - sweeps every item currently sitting in Needs Review/Content Review/**Media Review** in the background (including auto-approving, and auto-sending if that's on, an already-generated poster/reel nobody has looked at yet), so turning it on applies to the existing backlog too, not just future fetches. Verified live end-to-end with an isolated test item (real graph run, real auto-resumes, correctly respected the account's actual niche/brand-language config) rather than just reviewed.
 
 ## Storage
 
-`backend/app/storage/` defines a `StorageBackend` protocol; `local_disk.py` is the only implementation so far (writes under `LOCAL_STORAGE_DIR`, served back out via the auth-gated `/media/<filename>` route in `main.py` - not a public static mount, since generated posters are the user's own content).
+`backend/app/storage/` defines a `StorageBackend` protocol (`save`/`url_for`/`load`/`delete`) with two
+implementations, selected by `STORAGE_BACKEND` (`local_disk.py`'s `get_storage_backend()` factory - every
+call site imports from there regardless of which backend is active, so this is the one place that needs
+to know): `local_disk` (default - writes under `LOCAL_STORAGE_DIR`, served via the auth-gated
+`/media/<filename>` route in `main.py`, not a public static mount, since generated posters are the
+user's own content) and `r2` (Cloudflare R2, S3-compatible - `r2.py`'s `R2Storage`, plain `boto3` S3
+client pointed at R2's endpoint).
+
+**R2's bucket stays private** - `url_for()` hands out a short-lived presigned GET URL
+(`R2_PRESIGNED_URL_EXPIRY_SECONDS`, default 1 hour) rather than a permanent public link, preserving the
+same "must be authenticated to get a working link" property `local_disk`'s auth-gated `/media` route
+already has (a public bucket + permanent URLs was the simpler, more commonly-documented R2 setup, but
+was explicitly rejected - see git history). Presigned-URL generation is pure local signing (no network
+round-trip to R2), so switching backends adds no real latency to a board render.
+
+**Existing local media isn't automatically migrated** when switching `STORAGE_BACKEND` to `r2` -
+`MediaAsset.storage_uri`/`BrandKit.logo_asset_path` values are just filenames, and `LocalDiskStorage`
+vs. `R2Storage` each resolve them against their own store, so anything saved before the switch would
+404 under the new backend until migrated. `backend/scripts/migrate_media_to_r2.py`
+(`python -m backend.scripts.migrate_media_to_r2`) uploads every existing file to R2 under its own
+unchanged `storage_uri` as the object key - no DB rows need updating, since the same key format works
+with both backends. Idempotent (safe to re-run) and leaves local files in place rather than deleting
+them, so `local_disk` stays a working fallback. Live-verified on this deployment's real data: 119/142
+`MediaAsset` rows + 1 brand logo uploaded (23 skipped - local files already missing before the
+migration ran, not caused by it), then confirmed a real migrated asset's presigned URL actually
+resolves over HTTP after flipping `STORAGE_BACKEND=r2`.
+
+**Falls back to `local_disk` if R2 credentials are incomplete** (`get_storage_backend()` checks
+`R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_BUCKET` are all set before constructing `R2Storage`, logging a
+warning and returning `LocalDiskStorage` otherwise) - so a dev/test environment that copied
+`STORAGE_BACKEND=r2` from another `.env` without real R2 credentials of its own doesn't hard-fail on
+first save/load; it degrades to the same local-disk behavior as if `STORAGE_BACKEND` were unset.
+`.env.example` still defaults to `local_disk` with all R2 fields blank, so a fresh clone needs no R2
+setup at all to run.
+
+**Note on `docker compose restart` vs `up -d`**: found live while wiring this up - `restart` reuses a
+container's already-baked environment from whenever it was originally created/started; it does NOT
+re-read `.env`/`env_file` changes. `docker compose up -d <service>` is what actually recreates the
+container against the current compose config when `.env` changes - needed every time a `.env` edit
+should take effect, not just a code change (which `--reload` already handles on its own).
 
 ## UI
 
@@ -232,6 +411,7 @@ Note: `backend/app/db/migrations/env.py` excludes LangGraph's own `checkpoint*` 
 - **Phase 2**: Content Writer agent (copy + live hashtags via web search + poster headline, Claude Opus 5), Graphic Designer agent (Pillow poster layout, real AI backgrounds via Gemini's `gemini-2.5-flash-image`, brand strip with name/social handles/website, fixed font dropdown), the `/board` Kanban UI (one card per article, click-through modal with all actions).
 - **Phase 3**: Reel Editor agent (script/character description from Content Writer, shot-listing, Veo scene generation with cost cap, ffmpeg stitching), background execution for the whole reel-generation path (`app/worker/background.py`), `is_processing`/`last_error` states on the board with retry.
 - **Multi-brand** (this state, cross-cutting rather than a numbered phase): `BrandKit` went from a single implicit row to a real multi-tenant entity - per-brand niche/Gmail/settings scoping, `BrandMember`-based ownership + sharing, admin-created user accounts, a brand switcher, per-brand logo compositing, an in-app Gmail-connect OAuth flow, and per-user/per-brand LLM/Botsab credentials replacing what used to be `.env`-only global config (see Multi-brand support above). Brand deletion is the one known gap left for a follow-up pass.
+- **Carousel format** (cross-cutting, third post format alongside poster/reel): Carousel Editor agent (script -> LLM-decided 4-6 slide shot list -> shared background -> per-slide reference-image editing for visual consistency), full LangGraph/board/send-flow wiring (see Carousels above). Not yet verified live end-to-end with a real image provider.
 
 Brand kit (`/brand-kit`) is identity/handles for the poster's bottom strip (and, once built, a reel end-card) - not a color scheme; the AI-generated background (or neutral gradient fallback) carries the visual look instead.
 

@@ -14,6 +14,7 @@ from backend.agents.json_utils import extract_json
 from backend.agents.niche import get_active_niche_config
 from backend.app.db.models import BrandKit, ContentItem, NicheConfig
 from backend.app.integrations.article_fetch import fetch_article_text
+from backend.app.llm.prompt_overrides import resolve_prompt
 from backend.app.llm.provider import ChatProvider
 
 SYSTEM_PROMPT = """You help refine a "niche" prompt that tells a Researcher agent what \
@@ -70,10 +71,11 @@ Recent triage sample ({len(sample)} articles):
 Return the JSON object now."""
 
     provider = ChatProvider(db, brand_kit_id)
+    system_prompt = resolve_prompt(db, brand_kit_id, "researcher_niche_evolution", SYSTEM_PROMPT)
     result = provider.complete(
         agent_task="researcher_niche_evolution",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     )
@@ -137,15 +139,18 @@ Social handles: {handles or "(none)"}
 Tone of voice: {brand_kit.tone_of_voice_prompt or "(not set)"}
 
 Website text (best-effort extraction, may be partial or absent):
-{website_text[:6000] if website_text else "(could not fetch or no website set)"}
+{website_text[:15000] if website_text else "(could not fetch or no website set)"}
 
 Return the JSON object now."""
 
     provider = ChatProvider(db, brand_kit_id)
+    system_prompt = resolve_prompt(
+        db, brand_kit_id, "researcher_niche_draft_from_brand", DRAFT_FROM_BRAND_SYSTEM_PROMPT
+    )
     result = provider.complete(
         agent_task="researcher_niche_evolution",
         messages=[
-            {"role": "system", "content": DRAFT_FROM_BRAND_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     )

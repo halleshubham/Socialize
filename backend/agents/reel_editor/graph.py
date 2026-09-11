@@ -1,10 +1,16 @@
 """Reel Editor pipeline: script -> shot list -> character reference image ->
-per-scene generation (Veo for "video" scenes with subject-reference +
-previous-clip continuity, Pillow+ffmpeg for "text_card" scenes) -> ffmpeg
-stitch -> one MediaAsset. Enforces a hard per-reel cost cap (Veo costs real
-money per second; text_card scenes are free/local) - stops generating
-further video scenes once the next one would exceed it, rather than
-blowing past a budget or failing the whole reel.
+per-scene generation (Veo, with subject-reference + previous-clip
+continuity) -> ffmpeg stitch -> one MediaAsset. Enforces a hard per-reel
+cost cap (Veo costs real money per second) - stops generating further
+scenes once the next one would exceed it, rather than blowing past a
+budget or failing the whole reel.
+
+Nothing in a generated reel is ever Pillow-drawn - no on-screen text, no
+closing source card. Every fact/quote/attribution that matters is carried
+through narration alone; anything that can't be said aloud (source credit
+included) just isn't part of a reel. See prompts.py's module docstring for
+why on-screen text specifically was tried and reverted (garbled glyphs,
+wrong framing, live-tested on a real reel).
 """
 
 import logging
@@ -13,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from backend.agents.json_utils import extract_json, sanitize_llm_json
 from backend.agents.languages import DEFAULT_LANGUAGE
-from backend.agents.source_attribution import resolve_source_name
 from backend.agents.reel_editor.prompts import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_LOCALIZED,
@@ -25,13 +30,20 @@ from backend.agents.reel_editor.templates import (
     TEMPLATE_GUIDANCE,
     VOICE_DIRECTION,
 )
-from backend.agents.reel_editor.text_card import render_stat_reveal_clip, render_text_card_clip
-from backend.app.db.models import BrandKit, ContentItem, IngestedEmail, MediaAsset, SyncState
+from backend.app.db.models import ContentItem, MediaAsset, SyncState
 from backend.app.ffmpeg.stitch import stitch_clips
-from backend.app.llm.image_provider import IMAGE_MODEL, get_image_provider
+from backend.app.llm.image_provider import (
+    IMAGE_GEN_COST_USD,
+    IMAGE_MODEL_CHOICES,
+    get_image_model_key,
+    get_image_provider,
+)
+from backend.app.llm.prompt_library import format_examples_block, get_reel_example_prompts
+from backend.app.llm.prompt_overrides import resolve_prompt
 from backend.app.llm.provider import ChatProvider
 from backend.app.llm.user_keys import resolve_api_key
 from backend.app.llm.video_provider import (
+    CLIP_DURATION_SECONDS,
     DEFAULT_NEGATIVE_PROMPT,
     DEFAULT_VIDEO_MODEL_KEY,
     VIDEO_MODEL_CHOICES,
@@ -42,19 +54,26 @@ from backend.app.storage.local_disk import get_storage_backend
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COST_CAP_USD = 2.50
+# Sized to actually afford the shot-listing prompt's own upper bound (up to
+# 8 scenes for a dense story, see reel_editor/prompts.py) at either
+# brand-selectable tier that isn't Standard: 8 scenes x 8s x $0.12/s (Fast,
+# the new default) = $7.68, or 8 x 8 x $0.08 (Lite) = $5.12. The old $2.50
+# only covered ~3-4 scenes even at Lite - most "dense" reels were hitting
+# this cap and stopping mid-story, before their planned resolution scene,
+# regardless of how good the per-clip generation itself was.
+DEFAULT_COST_CAP_USD = 8.00
 COST_CAP_KEY = "reel_cost_cap_usd"
 VIDEO_MODEL_KEY_SETTING = "reel_video_model_key"
-CHARACTER_REF_COST_USD = 0.039  # same gemini-2.5-flash-image pricing as posters
 # hi/mr reels get narration written in Devanagari script by the shot-lister
 # (see prompts.py's NARRATION_GUIDANCE_LOCALIZED) and spoken by Veo directly,
-# per an explicit user request to try it live rather than defaulting to
-# silent video scenes - UNVERIFIED quality, hence text_card scenes are kept
-# alongside narrated video scenes regardless, as a Devanagari-accurate
-# fallback no matter how the spoken audio turns out. The English name here
-# (not the Devanagari display name from languages.py) is what actually goes
-# into the Veo prompt text below - Veo takes plain English instructions
-# describing what to speak and in what language, e.g. "speaks in Marathi".
+# and any on-screen text Veo is asked to render also uses this script -
+# UNVERIFIED quality for either (Veo's spoken/rendered Devanagari accuracy
+# hasn't been confirmed live the way English has), accepted per an explicit
+# user request rather than falling back to a Pillow-drawn safety net. The
+# English name here (not the Devanagari display name from languages.py) is
+# what actually goes into the Veo prompt text below - Veo takes plain
+# English instructions describing what to speak and in what language, e.g.
+# "speaks in Marathi".
 _LOCALIZED_NARRATION_LANGUAGES = {"hi", "mr"}
 _NARRATION_LANGUAGE_NAME = {"hi": "Hindi", "mr": "Marathi"}
 
@@ -94,30 +113,44 @@ def _build_shotlist(db: Session, content_item: ContentItem) -> list[dict]:
         return content_item.reel_scenes  # already built (e.g. a prior partial run)
 
     language = content_item.language or DEFAULT_LANGUAGE
-    system_prompt = SYSTEM_PROMPT_LOCALIZED if language in _LOCALIZED_NARRATION_LANGUAGES else SYSTEM_PROMPT
+    localized = language in _LOCALIZED_NARRATION_LANGUAGES
+    prompt_key = "reel_shotlist_localized" if localized else "reel_shotlist"
+    default_prompt = SYSTEM_PROMPT_LOCALIZED if localized else SYSTEM_PROMPT
+    system_prompt = resolve_prompt(db, content_item.brand_kit_id, prompt_key, default_prompt)
     reel_template = content_item.reel_template or DEFAULT_TEMPLATE
     article_text = content_item.article_full_text or content_item.article_summary or ""
+
+    examples = get_reel_example_prompts(reel_template, content_item.reel_script or "")
+    user_prompt = build_user_prompt(
+        content_item.reel_script or "",
+        content_item.character_description or "",
+        reel_template,
+        TEMPLATE_GUIDANCE.get(reel_template, ""),
+        content_item.article_title,
+        article_text,
+    ) + format_examples_block(examples, subject="this kind of visual scene (borrowed from an image-prompt library, adapt to video)")
 
     provider = ChatProvider(db, content_item.brand_kit_id)
     result = provider.complete(
         agent_task="reel_shotlist",
         messages=[
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": build_user_prompt(
-                    content_item.reel_script or "",
-                    content_item.character_description or "",
-                    reel_template,
-                    TEMPLATE_GUIDANCE.get(reel_template, ""),
-                    content_item.article_title,
-                    article_text,
-                ),
-            },
+            {"role": "user", "content": user_prompt},
         ],
         content_item_id=content_item.id,
     )
     scenes = sanitize_llm_json(extract_json(result.text)).get("scenes", [])
+    # timeframe/text_on_visual are computed here, not asked of the model -
+    # timeframe is pure arithmetic (every scene is a fixed
+    # CLIP_DURATION_SECONDS), and text_on_visual is always empty by policy
+    # (see prompts.py's module docstring on why on-screen text is never
+    # generated). Both exist purely so the board's reel-review table can
+    # show the classic timeframe/visual/text-on-visual/music/voiceover
+    # shot-list shape per user request, without ever asking the model to
+    # fill in a field that would contradict the no-on-screen-text policy.
+    for i, scene in enumerate(scenes):
+        scene["timeframe"] = f"{i * CLIP_DURATION_SECONDS}s–{(i + 1) * CLIP_DURATION_SECONDS}s"
+        scene["text_on_visual"] = ""
     content_item.reel_scenes = scenes
     db.commit()
     return scenes
@@ -135,16 +168,31 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
     if not scenes:
         raise RuntimeError("Shot-listing produced no scenes")
 
-    brand_kit = db.get(BrandKit, content_item.brand_kit_id)
-    font_key = brand_kit.font_choice if brand_kit else "inter"
-    source_name = None
-    if content_item.source_email_id:
-        email = db.get(IngestedEmail, content_item.source_email_id)
-        source_name = resolve_source_name(content_item.article_url, email.sender if email else None)
+    # WooCommerce-sourced items (researcher/product_angles.py) get a real
+    # product photo saved as a MediaAsset at creation time - passed in below
+    # as the first video scene's starting image, the same mechanism
+    # character_ref_bytes already uses for continuity. Grounds Veo's
+    # generation in the real product visually without hard-requiring it -
+    # Veo may still not reproduce the exact print (known, accepted
+    # trade-off - no AI model can reproduce an exact print/design anyway).
+    product_photo_asset = (
+        db.query(MediaAsset)
+        .filter(MediaAsset.content_item_id == content_item.id, MediaAsset.asset_type == "product_photo")
+        .order_by(MediaAsset.created_at.desc())
+        .first()
+    )
+    product_photo_bytes = None
+    if product_photo_asset:
+        try:
+            product_photo_bytes = get_storage_backend().load(product_photo_asset.storage_uri)
+        except Exception:
+            logger.exception("Could not load product photo, continuing without it as a visual reference")
 
-    google_api_key = resolve_api_key(db, content_item.brand_kit_id, "google")
-    image_provider = get_image_provider(google_api_key)
-    video_provider = get_video_provider(google_api_key)
+    image_model_key = get_image_model_key(db, content_item.brand_kit_id)
+    image_model = IMAGE_MODEL_CHOICES[image_model_key]
+    image_model_cost = IMAGE_GEN_COST_USD[image_model_key]
+    image_provider = get_image_provider(db, content_item.brand_kit_id, image_model_key)
+    video_provider = get_video_provider(resolve_api_key(db, content_item.brand_kit_id, "google"))
     if not video_provider:
         raise RuntimeError("No video provider configured (no Google API key set - see Account settings)")
 
@@ -186,17 +234,18 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
                 ),
                 width=1024,
                 height=1024,
+                model=image_model,
             )
-            total_cost += CHARACTER_REF_COST_USD
+            total_cost += image_model_cost
             ref_uri = storage.save(character_ref_bytes, f"{content_item.id}_character_ref.png")
             db.add(
                 MediaAsset(
                     content_item_id=content_item.id,
                     asset_type="character_reference",
                     storage_uri=ref_uri,
-                    generation_model=IMAGE_MODEL,
+                    generation_model=image_model,
                     generation_prompt=content_item.character_description,
-                    cost_usd=CHARACTER_REF_COST_USD,
+                    cost_usd=image_model_cost,
                 )
             )
             db.commit()
@@ -210,42 +259,6 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
     video_error: str | None = None  # set on a failed video scene; see the try/except below
 
     for scene in scenes:
-        scene_type = scene.get("type", "video")
-
-        if scene_type == "text_card":
-            # Free/local - never counted against the cost cap, never breaks
-            # video-to-video continuity (last_frame_bytes is left untouched).
-            # A before/after stat reveal (e.g. a debt figure cut down to a
-            # settlement figure) is still this same scene type, just with
-            # before_text/before_label present - see text_card.py's
-            # render_stat_reveal_clip docstring for why that's Pillow-drawn
-            # rather than described to Veo (same "Veo can't render exact
-            # figures reliably" reasoning as a plain text_card's quote/stat).
-            try:
-                if scene.get("before_text"):
-                    clip_bytes = render_stat_reveal_clip(
-                        before_text=scene.get("before_text", ""),
-                        before_label=scene.get("before_label") or None,
-                        after_text=scene.get("text", ""),
-                        after_label=scene.get("label") or None,
-                        font_key=font_key,
-                        source_name=source_name,
-                        highlight_text=scene.get("highlight_text") or None,
-                        tone=scene.get("tone", "neutral"),
-                    )
-                else:
-                    clip_bytes = render_text_card_clip(
-                        text=scene.get("text", ""),
-                        label=scene.get("label") or None,
-                        font_key=font_key,
-                        source_name=source_name,
-                    )
-                clip_bytes_list.append(clip_bytes)
-                scenes_generated += 1
-            except Exception:
-                logger.exception("Text-card render failed for %s, skipping this scene", content_item.id)
-            continue
-
         next_cost = estimate_clip_cost_usd(video_model)
         if total_cost + next_cost > cost_cap:
             logger.warning(
@@ -263,8 +276,10 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
         location = scene.get("location", "scene")
         if location == "host" and character_ref_bytes:
             starting_image = character_ref_bytes
+        elif not seen_video_scene:
+            starting_image = last_frame_bytes or character_ref_bytes or product_photo_bytes
         else:
-            starting_image = last_frame_bytes or (character_ref_bytes if not seen_video_scene else None)
+            starting_image = last_frame_bytes
 
         description = scene.get("description", "")
         narration = scene.get("narration") or ""
@@ -285,6 +300,17 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
             prompt = f'{description} A narrator ({voice_direction}) says: "{narration}"'
         else:
             prompt = description
+        # Same best-effort plain-language approach as voice_direction above -
+        # Veo has no dedicated music/score parameter, so the shot-listing
+        # step's per-scene "music" direction (see prompts.py's
+        # MUSIC_GUIDANCE) is folded into the prompt text instead. "none"/
+        # empty means the scene relies on ambient/diegetic sound alone, so
+        # nothing is added to the prompt in that case rather than asking for
+        # silence explicitly (which Veo generates audio unconditionally
+        # regardless of what's asked - see video_provider.py).
+        music = (scene.get("music") or "").strip()
+        if music and music.lower() not in ("none", "no music", "n/a", "silence"):
+            prompt = f"{prompt} Background music: {music}."
         # Folded into the prompt text too, not just the negative_prompt
         # config field - that field 400s on the Lite tier (see
         # video_provider.py), so this is what actually reaches Lite reels.
@@ -309,10 +335,9 @@ def generate_reel(db: Session, content_item: ContentItem) -> MediaAsset:
             # preview is a preview model - those commonly carry strict
             # per-day/per-minute request caps independent of credit
             # balance. Also treated like the cost cap (stop, don't discard
-            # whatever already rendered - including preceding text_cards,
-            # which are free and often carry real article content) since
-            # this will keep failing identically on every remaining scene
-            # until the rate window resets, not just this one.
+            # whatever already rendered) since this will keep failing
+            # identically on every remaining scene until the rate window
+            # resets, not just this one.
             error_text = str(exc)
             if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text:
                 video_error = (

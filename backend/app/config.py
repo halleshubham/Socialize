@@ -27,12 +27,29 @@ class Settings(BaseSettings):
     google_application_credentials: str = ""
 
     # Storage
-    storage_backend: str = "local_disk"  # "local_disk" | "gcs"
+    storage_backend: str = "local_disk"  # "local_disk" | "r2"
     local_storage_dir: str = "./data/media"
-    gcs_bucket: str = ""
+
+    # Cloudflare R2 - S3-compatible object storage, used via boto3's S3
+    # client with a custom endpoint_url. Bucket stays PRIVATE - url_for()
+    # hands out short-lived presigned URLs instead of permanent public
+    # links, preserving the same "must be logged in to get a working link"
+    # behavior /media/{filename} already gives local_disk (see storage/r2.py).
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
+    r2_presigned_url_expiry_seconds: int = 3600
 
     # Gmail (Phase 1)
     gmail_credentials_path: str = "./secrets/gmail_credentials.json"
+
+    # GitHub - a second content source (integrations/github/), alongside
+    # Gmail. A brand's own PAT (BrandKit.github_token_encrypted) overrides
+    # this shared fallback, same pattern as Botsab/Postiz. Needs "repo"
+    # scope for private repos; public-only works unauthenticated but at
+    # GitHub's much lower 60 req/hr anonymous rate limit.
+    github_token: str = ""
 
     # Postiz - self-hosted at postiz_base_url. postiz_api_key is the shared
     # fallback key (same "brand override, else this" pattern as Botsab/LLM

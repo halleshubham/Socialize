@@ -40,6 +40,18 @@ def sanitize_llm_json(value):
     return value
 
 
+def truncate_on_word_boundary(text: str, max_len: int) -> str:
+    """A blind text[:max_len] slice can land mid-word (or mid multi-byte
+    grapheme for non-Latin scripts) - used for fields like poster_headline
+    that get handed to an image model as "verbatim" text, where a chopped
+    word is worse than a slightly shorter but clean one."""
+    if not text or len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    cut = truncated.rfind(" ")
+    return truncated[:cut] if cut > 0 else truncated
+
+
 def extract_json(text: str) -> dict:
     """LLMs asked for JSON often wrap it in a ```json fence anyway, or - when
     a tool like web_search is involved - narrate their reasoning before the

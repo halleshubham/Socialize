@@ -79,6 +79,22 @@ def _latest_media_asset(db: Session, content_item_id) -> MediaAsset | None:
     )
 
 
+def _latest_carousel_slides(db: Session, content_item_id) -> list[MediaAsset]:
+    """Same "newest asset per slide_index" grouping as
+    botsab/send.py::_latest_carousel_slides and routes_board.py's board()
+    gallery view - a regenerate inserts a fresh full set of rows."""
+    assets = (
+        db.query(MediaAsset)
+        .filter(MediaAsset.content_item_id == content_item_id, MediaAsset.asset_type == "carousel_slide")
+        .order_by(MediaAsset.created_at.desc())
+        .all()
+    )
+    by_index: dict[int, MediaAsset] = {}
+    for asset in assets:
+        by_index.setdefault(asset.slide_index, asset)
+    return [by_index[i] for i in sorted(by_index)]
+
+
 def send_content_item(db: Session, content_item: ContentItem, schedule_at: datetime | None = None) -> list[dict]:
     brand_kit = db.get(BrandKit, content_item.brand_kit_id)
     client = get_postiz_client(brand_kit)
@@ -94,17 +110,32 @@ def send_content_item(db: Session, content_item: ContentItem, schedule_at: datet
         raise PostizSendError("Nothing to send - no caption on this post.")
 
     image = None
-    asset = _latest_media_asset(db, content_item.id)
     try:
-        if asset is not None:
+        if content_item.format == "carousel":
+            # Real multi-image carousel on Postiz's side - this "image" list
+            # already accepted multiple entries (unlike Botsab, which has no
+            # album concept at all, see botsab/send.py), it just only ever
+            # had one uploaded into it before this format existed.
             storage = get_storage_backend()
-            file_bytes = storage.load(asset.storage_uri)
-            default_mimetype = "image/png" if asset.asset_type == "poster" else "video/mp4"
-            mimetype = mimetypes.guess_type(asset.storage_uri)[0] or default_mimetype
-            # Uploaded once, the same {id, path} is reused across every
-            # targeted channel's post below - no need to re-upload per channel.
-            uploaded = client.upload_file(file_bytes, asset.storage_uri, mimetype)
-            image = [{"id": uploaded["id"], "path": uploaded["path"]}]
+            slides = _latest_carousel_slides(db, content_item.id)
+            uploaded_slides = []
+            for slide in slides:
+                file_bytes = storage.load(slide.storage_uri)
+                mimetype = mimetypes.guess_type(slide.storage_uri)[0] or "image/png"
+                uploaded = client.upload_file(file_bytes, slide.storage_uri, mimetype)
+                uploaded_slides.append({"id": uploaded["id"], "path": uploaded["path"]})
+            image = uploaded_slides or None
+        else:
+            asset = _latest_media_asset(db, content_item.id)
+            if asset is not None:
+                storage = get_storage_backend()
+                file_bytes = storage.load(asset.storage_uri)
+                default_mimetype = "image/png" if asset.asset_type == "poster" else "video/mp4"
+                mimetype = mimetypes.guess_type(asset.storage_uri)[0] or default_mimetype
+                # Uploaded once, the same {id, path} is reused across every
+                # targeted channel's post below - no need to re-upload per channel.
+                uploaded = client.upload_file(file_bytes, asset.storage_uri, mimetype)
+                image = [{"id": uploaded["id"], "path": uploaded["path"]}]
 
         entries = []
         for channel in channels:

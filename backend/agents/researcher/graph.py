@@ -4,6 +4,7 @@ from backend.agents.json_utils import extract_json
 from backend.agents.niche import get_active_niche_config
 from backend.agents.researcher.prompts import SYSTEM_PROMPT, build_user_prompt
 from backend.app.db.models import IngestedEmail
+from backend.app.llm.prompt_overrides import resolve_prompt
 from backend.app.llm.provider import ChatProvider
 
 
@@ -21,10 +22,11 @@ def extract_articles(db: Session, email: IngestedEmail) -> list[dict]:
     body = email.body_with_links or email.body_text
 
     provider = ChatProvider(db, email.brand_kit_id)
+    system_prompt = resolve_prompt(db, email.brand_kit_id, "researcher_triage", SYSTEM_PROMPT)
     result = provider.complete(
         agent_task="researcher_triage",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": build_user_prompt(niche_prompt, keywords, email.sender, email.subject, body),

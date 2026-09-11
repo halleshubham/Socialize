@@ -15,19 +15,22 @@ logger = logging.getLogger(__name__)
 
 # Three tiers, model chosen per generate_reel call (see reel_editor/graph.py's
 # SyncState-backed "reel video model" setting) rather than a single hardcoded
-# constant - Lite stays the default (this is a personal tool and Veo costs
-# add up fast), Fast and Standard are available as explicit opt-ins for a
-# specific reel. ai.google.dev pricing confirmed live, Sept 2026 (fetched the
-# official pricing page directly): all three tiers' listed per-second price
-# already includes audio ("video with audio price (default)") - audio
-# generation isn't even togglable on this API surface (see generate_scene's
-# config_kwargs comment), so this is just informational.
+# constant - Fast is the default (user-reported reel quality complaint,
+# Sept 2026: Lite's output was visibly worse than driving Veo directly
+# through Google Flow). Lite stays selectable as an explicit cost-conscious
+# opt-in, Standard for when reference_images/negative_prompt (see
+# generate_scene's docstring) are worth the ~5x-over-Fast price. ai.google.dev
+# pricing confirmed live, Sept 2026 (fetched the official pricing page
+# directly): all three tiers' listed per-second price already includes audio
+# ("video with audio price (default)") - audio generation isn't even
+# togglable on this API surface (see generate_scene's config_kwargs
+# comment), so this is just informational.
 VIDEO_MODEL_LITE = "veo-3.1-lite-generate-preview"
 VIDEO_MODEL_FAST = "veo-3.1-fast-generate-preview"
 VIDEO_MODEL_STANDARD = "veo-3.1-generate-preview"
-VIDEO_MODEL = VIDEO_MODEL_LITE  # back-compat default
+VIDEO_MODEL = VIDEO_MODEL_LITE  # back-compat default - unused elsewhere in the app, left as Lite deliberately
 VIDEO_MODEL_CHOICES = {"lite": VIDEO_MODEL_LITE, "fast": VIDEO_MODEL_FAST, "standard": VIDEO_MODEL_STANDARD}
-DEFAULT_VIDEO_MODEL_KEY = "lite"
+DEFAULT_VIDEO_MODEL_KEY = "fast"
 
 COST_PER_SECOND_USD = {
     VIDEO_MODEL_LITE: 0.08,
@@ -39,11 +42,14 @@ POLL_INTERVAL_SECONDS = 10
 POLL_TIMEOUT_SECONDS = 360  # Veo docs: up to ~6 min at peak load
 
 # Veo garbles on-screen text/subtitles it invents unprompted, in every
-# language, not just Devanagari (confirmed via research citing Google's own
-# Veo 3.1 prompting guide - "no subtitles" as an explicit negative prompt is
-# the documented fix). Combined with the shot-listing prompt never asking
-# for on-screen text in scenes at all - real quotes/facts go in text_card
-# scenes instead, rendered correctly by Pillow (see reel_editor/text_card.py).
+# language - briefly stopped suppressing this (an explicit, since-reversed
+# policy attempt to let Veo render on-screen text itself), but a live test
+# on a real reel came back with completely garbled/nonsense glyphs AND the
+# scene composited inside a bordered "poster" box instead of full-bleed
+# video - worse than no text at all. Back to suppressing it here (paired
+# with the shot-listing prompt never describing on-screen text in the
+# first place, see reel_editor/prompts.py) and carrying every fact/quote
+# through narration only.
 DEFAULT_NEGATIVE_PROMPT = "subtitles, captions, on-screen text, written words, watermark, garbled text"
 
 

@@ -1,6 +1,6 @@
 """Shared by graphic_designer/graph.py (poster "Source: X" line) and
-reel_editor/graph.py (text_card "Source: X" line) - both attribute
-generated media back to the original publication."""
+reel_editor/graph.py (closing source-card "Source: X" line) - both
+attribute generated media back to the original publication."""
 
 import re
 from urllib.parse import urlparse
