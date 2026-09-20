@@ -7,9 +7,27 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # App
+    # "development" (default - safe for local docker-compose/localhost use)
+    # or "production" - gates behavior that would otherwise break local dev
+    # (forcing session cookies to HTTPS-only would lock you out of plain
+    # http://localhost) but is required once this is reachable by anyone
+    # other than the operator - see main.py's use of this for the session
+    # cookie and the app_secret_key startup check below.
+    app_env: str = "development"
     app_secret_key: str = "dev-secret-change-me"
     auth_backend: str = "basic"  # "basic" | "google_oauth"
     app_encryption_key: str = ""
+    # Comma-separated OLDER encryption keys, still accepted for decrypting
+    # existing secrets but never used for new encryption - the rotation
+    # path for app_encryption_key (see util/crypto.py's MultiFernet use):
+    # generate a new key, move the current app_encryption_key's value here
+    # (append if there were already older ones), set app_encryption_key to
+    # the new value, redeploy. Every UserApiKey/OAuthCredential/Botsab-
+    # Postiz-GitHub-token row still encrypted under an old key keeps
+    # decrypting correctly; anything saved fresh (or re-saved) after
+    # rotation uses the new one. Empty by default - rotation is opt-in,
+    # not required for the single-key setup this app ships with.
+    app_encryption_key_previous: str = ""
 
     admin_email: str = ""
     admin_password: str = ""

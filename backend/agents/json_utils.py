@@ -52,6 +52,23 @@ def truncate_on_word_boundary(text: str, max_len: int) -> str:
     return truncated[:cut] if cut > 0 else truncated
 
 
+def normalize_reel_script(value) -> str | None:
+    """reel_script is a plain Text column (backend/app/db/models.py), but
+    the model occasionally returns it as a JSON array of beat strings
+    instead of one string, despite every prompt asking for a string -
+    found live: assigning that list straight to content_item.reel_script
+    let SQLAlchemy/psycopg's built-in Python-list adaptation write it as a
+    Postgres array-literal STRING ('{"beat one","beat two",...}') into the
+    Text column, which then flowed downstream as literal script text -
+    braces, quotes, and all - visible everywhere reel_script gets read
+    (the Content Review edit box, the "Copy full content" export, the
+    shot-listing prompt itself). Joins list items one-per-line, the same
+    shape a real reel_script string already uses (one sentence per beat)."""
+    if isinstance(value, list):
+        return "\n".join(str(v) for v in value if v) or None
+    return value or None
+
+
 def extract_json(text: str) -> dict:
     """LLMs asked for JSON often wrap it in a ```json fence anyway, or - when
     a tool like web_search is involved - narrate their reasoning before the

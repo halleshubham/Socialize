@@ -19,6 +19,7 @@ from backend.agents.auto_mode import (
 from backend.agents.carousel_editor.graph import generate_carousel
 from backend.agents.content_writer.graph import write_copy, write_format_fields
 from backend.agents.graphic_designer.graph import generate_poster
+from backend.agents.json_utils import truncate_on_word_boundary
 from backend.agents.graphic_designer.templates import TEMPLATE_CHOICES
 from backend.agents.languages import DEFAULT_LANGUAGE, LANGUAGE_CHOICES
 from backend.agents.orchestrator import (
@@ -26,6 +27,7 @@ from backend.agents.orchestrator import (
     auto_advance_content_item,
     create_content_items,
     park_at_media_review,
+    restore_content_item,
     resume_content_item,
     rewind_to_content_review,
     rewind_to_needs_review,
@@ -589,7 +591,25 @@ def _decide_enters_slow_node(content_item: ContentItem, decision: str) -> bool:
     return False
 
 
-def _resume_in_background(content_item_id: str, payload: dict) -> None:
+def _resume_with_error_handling(content_item_id: str, payload: dict) -> None:
+    """resume_content_item wrapped in _run_with_processing_state's
+    catch-and-record-to-last_error behavior - NOT itself about threading
+    (despite most of its callers routing it through run_in_background; see
+    decide/approve_all/discard_all below for direct, synchronous callers).
+
+    Needed because resume_content_item has no exception handling of its own
+    and LangGraph's Command(resume=...) doesn't always land back on the
+    interrupt it looks like it should: found live, a content item whose
+    checkpoint was stuck mid-node from an earlier failed generation (same
+    "not cleanly resumable" gotcha retry_poster/retry_reel/retry_content_writer
+    exist for) re-attempted that same failing node instead of reaching
+    media_review_gate - a real Gemini 429 (depleted prepaid credits) on that
+    re-attempt then propagated all the way up through resume_content_item as
+    an uncaught exception. For discard_all specifically that crashed the
+    whole bulk request with a 500 and silently abandoned every item still
+    left in the batch. Catching it here means one broken item just gets its
+    last_error set (surfaced as the usual error-box on its card) instead of
+    taking the rest of the batch down with it."""
     def _work(db: Session, content_item: ContentItem) -> None:
         resume_content_item(content_item_id, payload)
         # resume_content_item's graph nodes each open their own SessionLocal
@@ -629,6 +649,16 @@ def _rewind_to_needs_review_in_background(content_item_id: str) -> None:
         db.expire_all()
         if not ok:
             raise RuntimeError("Could not move this card back to Needs Review")
+
+    _run_with_processing_state(content_item_id, _work)
+
+
+def _restore_in_background(content_item_id: str) -> None:
+    def _work(db: Session, content_item: ContentItem) -> None:
+        ok = restore_content_item(content_item_id)
+        db.expire_all()
+        if not ok:
+            raise RuntimeError("Could not restore this discarded item")
 
     _run_with_processing_state(content_item_id, _work)
 
@@ -675,9 +705,9 @@ def decide(
         db.close()
 
     if slow:
-        run_in_background(_resume_in_background, content_item_id, payload)
+        run_in_background(_resume_with_error_handling, content_item_id, payload)
     else:
-        resume_content_item(content_item_id, payload)
+        _resume_with_error_handling(content_item_id, payload)
     return RedirectResponse(url="/board", status_code=303)
 
 
@@ -740,9 +770,9 @@ def approve_all(
             db2.close()
 
         if slow:
-            run_in_background(_resume_in_background, content_item_id, payload)
+            run_in_background(_resume_with_error_handling, content_item_id, payload)
         else:
-            resume_content_item(content_item_id, payload)
+            _resume_with_error_handling(content_item_id, payload)
 
     return RedirectResponse(url="/board", status_code=303)
 
@@ -759,7 +789,17 @@ def discard_all(
     per-item resolve-the-pending-interrupt approach via
     resume_content_item(decision="discard"). Always synchronous - discard
     never enters a slow node (_decide_enters_slow_node), so there's no
-    background dispatch to mirror here, unlike approve_all."""
+    background dispatch to mirror here, unlike approve_all.
+
+    Uses _resume_with_error_handling (not resume_content_item directly) -
+    found live: one item's checkpoint was stuck mid-node from an earlier
+    failed generation (see _resume_with_error_handling's own docstring),
+    and resuming it re-attempted that failing generation instead of
+    reaching the interrupt discard needed. That raised uncaught, which
+    crashed this entire request with a 500 and silently abandoned every
+    item still left in item_ids after it - one bad item took the whole
+    batch down. _resume_with_error_handling catches that per item instead,
+    so the rest of the batch still gets discarded."""
     target_stage = _APPROVE_ALL_STAGES.get(stage)
     if not target_stage:
         return RedirectResponse(url="/board?error=Invalid stage", status_code=303)
@@ -779,7 +819,7 @@ def discard_all(
                 continue
         finally:
             db2.close()
-        resume_content_item(content_item_id, {"decision": "discard", "feedback": ""})
+        _resume_with_error_handling(content_item_id, {"decision": "discard", "feedback": ""})
 
     return RedirectResponse(url="/board", status_code=303)
 
@@ -871,7 +911,19 @@ def _generate_media_work(target_format: str):
     """Shared by generate_media and approve_and_generate_media below -
     derives the new format's field(s) via write_format_fields if not already
     present (existing copy_text/hashtags are always left untouched) then
-    runs the matching media generator."""
+    runs the matching media generator.
+
+    Reel is the one exception: if reel_script had to be freshly written here
+    (this item skipped the normal Researcher -> Content Writer -> Content
+    Review path, where a human always reviews the script before
+    generate_reel spends real Veo money on it - see reel_editor/graph.py's
+    per-reel cost cap), this stops right after writing it and sends the item
+    back to Content Review instead of generating straight through - found
+    live: this shortcut wrote a shot script and immediately spent on it in
+    the same click, with no chance to fix the script/character description
+    first. Poster/carousel stay one-click since their generation cost is
+    much lower and doesn't carry the same "already spent, can't undo it"
+    risk a bad reel script does."""
 
     def _work(db: Session, item: ContentItem) -> None:
         if target_format == "poster":
@@ -885,6 +937,23 @@ def _generate_media_work(target_format: str):
         else:
             if not item.reel_script:
                 write_format_fields(db, item, "reel")
+                item_id = item.id
+                # rewind_to_content_review manages its own SessionLocal and,
+                # critically, re-parks the LangGraph checkpoint at
+                # content_review_gate's interrupt (not just a DB field
+                # flip) - needed so this card's own Approve/Regenerate/
+                # Discard buttons work correctly afterward instead of
+                # silently no-op'ing on a stale checkpoint, the same "this
+                # item's graph thread already reached END" gotcha
+                # park_at_media_review's own docstring describes for this
+                # exact generate_media/approve_and_generate_media shortcut.
+                # db.expire_all() after it so this function's own `db`/
+                # `item` (from _run_with_processing_state) don't overwrite
+                # that fresh state with stale pre-rewind values once the
+                # caller commits.
+                rewind_to_content_review(item_id)
+                db.expire_all()
+                return
             generate_reel(db, item)
         item.stage = Stage.MEDIA_GENERATED
         db.commit()
@@ -951,6 +1020,22 @@ def rewind_to_needs_review_route(
     if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
         return RedirectResponse(url="/board", status_code=303)
     run_in_background(_rewind_to_needs_review_in_background, content_item_id)
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/{content_item_id}/restore")
+def restore_route(
+    content_item_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Brings a discarded card back to Needs Review (or, for one discarded
+    straight out of triage with no brief yet, restarts its fetch+brief run
+    first) - see orchestrator.py's restore_content_item. There was
+    previously no way to undo a discard at all."""
+    if not _accessible_content_item(db, user, content_item_id) or not _start_processing(content_item_id):
+        return RedirectResponse(url="/board", status_code=303)
+    run_in_background(_restore_in_background, content_item_id)
     return RedirectResponse(url="/board", status_code=303)
 
 
@@ -1194,6 +1279,38 @@ def update_reel_template(
     return RedirectResponse(url="/board", status_code=303)
 
 
+@router.post("/{content_item_id}/edit-reel-script")
+def edit_reel_script(
+    content_item_id: str,
+    reel_script: str = Form(...),
+    character_description: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Saves a user-edited reel_script/character_description - the
+    higher-level narrative and visual-subject description the shot-listing
+    step turns into scenes. Previously read-only in every language - only
+    the per-scene narration/music built FROM whatever script Content Writer
+    wrote was ever editable (and only for hi/mr), with no way to fix the
+    story itself before that shot list gets built. Unlike that hi/mr-only
+    narration editing, this is open to every language, same reasoning
+    copy_text editing already gets - it's your story to revise, not just an
+    AI-translation-accuracy check. Every language stage: Content Review
+    only (before the shot list/media exist), same as update_reel_template
+    just above, whose "clear the cached shot list" reasoning this mirrors
+    exactly - reel_scenes was built from the OLD script, so it's cleared
+    here too rather than silently regenerating stale scenes against new
+    wording."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.DRAFTED or content_item.format != Format.REEL:
+        return RedirectResponse(url="/board?error=Not editable", status_code=303)
+    content_item.reel_script = reel_script.strip()
+    content_item.character_description = character_description.strip() or None
+    content_item.reel_scenes = None
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
 # Hindi/Marathi-only pre-generation text editing (routes below) - AI-drafted
 # Marathi/Hindi quality isn't reliable enough yet (user-reported), so for
 # these two languages the exact final text that ends up rendered/spoken is
@@ -1227,6 +1344,7 @@ async def edit_poster_content(
     content_item_id: str,
     request: Request,
     poster_headline: str = Form(""),
+    copy_text: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1235,7 +1353,21 @@ async def edit_poster_content(
     per _POSTER_CONTENT_SCALAR_FIELDS[item.poster_template] plus the
     template's list fields (facts_stat_N/facts_source_N,
     highlight_phrases_N) - read generically here via request.form() since
-    the field set varies by template."""
+    the field set varies by template.
+
+    copy_text (the social caption) is included here too, alongside
+    poster_content (what's actually drawn on the poster image) - found
+    live: these are two separate fields from the same Content Writer draft,
+    but copy_text was only ever editable much later at the Approved stage,
+    by which point poster_content is no longer editable at all (the image
+    is already generated). A text-review user fixing a fact/number in
+    poster_content had no way to fix the same thing in copy_text at the
+    same time, so the two could drift out of sync with no single place to
+    reconcile them. `copy_text` is Form(None), not Form("") - None means
+    the field wasn't in the submitted form at all (only board.html's
+    text-review form sends it), so this route still works if some other
+    future caller posts without it, rather than always blanking the
+    caption to empty."""
     content_item = _accessible_content_item(db, user, content_item_id)
     if not content_item or content_item.stage != Stage.DRAFTED or content_item.language not in _TEXT_REVIEW_LANGUAGES:
         return RedirectResponse(url="/board?error=Not editable", status_code=303)
@@ -1262,7 +1394,9 @@ async def edit_poster_content(
         content["highlight_phrases"] = [p for p in phrases if p]
 
     content_item.poster_content = content
-    content_item.poster_headline = poster_headline.strip()[:300]
+    content_item.poster_headline = truncate_on_word_boundary(poster_headline.strip(), 300)
+    if copy_text is not None:
+        content_item.copy_text = copy_text.strip()
     db.commit()
     return RedirectResponse(url="/board", status_code=303)
 

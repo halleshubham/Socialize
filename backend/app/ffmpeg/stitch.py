@@ -31,6 +31,30 @@ CROSSFADE_SECONDS = 0.4
 # jumping in perceived loudness at each cut.
 _LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
+# Found live: a reel sent via Botsab came back from WhatsApp as "not
+# compatible" - ffprobe on the actual stitched file showed
+# profile=High 4:4:4 Predictive, pix_fmt=yuv444p, a 96kHz audio track, and a
+# ~14 Mbit/s video bitrate (82MB for a 46s reel). None of that is Veo's
+# fault - neither encode command below (crossfade or the hard-cut
+# fallback's re-encode) ever set an explicit output pix_fmt/profile, so
+# libx264 picked yuv444p/High-4:4:4 on its own (the xfade filter's internal
+# blend evidently doesn't stay at the yuv420p the per-clip `format=yuv420p`
+# filter set going in) - a profile essentially no mobile/messaging-app
+# decoder (WhatsApp included) supports, unlike the ordinary yuv420p +
+# Main/High profile every platform expects. These flags force it back to
+# that ordinary, broadly-compatible shape on both encode paths, plus a
+# capped bitrate (82MB for 46s was also well past what a chat app is going
+# to accept) and +faststart (moov atom at the front - standard for
+# upload/streaming compatibility, not just local playback).
+_WHATSAPP_SAFE_VIDEO_FLAGS = [
+    "-pix_fmt", "yuv420p",
+    "-profile:v", "main",
+    "-level", "4.0",
+    "-b:v", "4M", "-maxrate", "5M", "-bufsize", "8M",
+    "-ar", "48000",
+    "-movflags", "+faststart",
+]
+
 
 def stitch_clips(clip_bytes_list: list[bytes]) -> bytes:
     if not clip_bytes_list:
@@ -106,6 +130,7 @@ def _stitch_with_crossfade(clip_bytes_list: list[bytes]) -> bytes:
                 "-filter_complex", ";".join(filters),
                 "-map", f"[{v_label}]", "-map", f"[{a_label}]",
                 "-c:v", "libx264", "-c:a", "aac",
+                *_WHATSAPP_SAFE_VIDEO_FLAGS,
                 str(output_path),
             ],
             check=True,
@@ -151,7 +176,9 @@ def _stitch_hard_cut(clip_bytes_list: list[bytes]) -> bytes:
                 [
                     "ffmpeg", "-y", "-f", "concat", "-safe", "0",
                     "-i", str(filelist_path),
-                    "-c:v", "libx264", "-c:a", "aac", str(output_path),
+                    "-c:v", "libx264", "-c:a", "aac",
+                    *_WHATSAPP_SAFE_VIDEO_FLAGS,
+                    str(output_path),
                 ],
                 check=True,
                 capture_output=True,

@@ -1,9 +1,23 @@
 """Per-user LLM provider API keys, encrypted at rest. When a brand generates
 content, the BRAND OWNER's key is used (not whoever's operating it, if it's
-shared) - see resolve_api_key. Falls back to the process-wide
-ANTHROPIC_API_KEY/OPENAI_API_KEY/GOOGLE_API_KEY env vars when the owner
-hasn't set their own key for that provider, so .env stays a valid way to
-run this app without every user configuring their own keys first.
+shared) - see resolve_api_key.
+
+Bring-Your-Own-Key is the enforced model (SaaS-readiness Phase 2, confirmed
+by the user): a brand-scoped call with no owner-configured key for a
+provider gets None back, not the process-wide ANTHROPIC_API_KEY/
+OPENAI_API_KEY/GOOGLE_API_KEY env vars - those three are checked every
+existing brand already has its own key set for anthropic/openai/google
+(confirmed against the live DB before this change shipped), so this closes
+the gap for every brand going forward without changing behavior for any
+brand today. See llm/provider.py's ChatProvider.complete for why brand-
+scoped calls also need an explicit check on top of this, not just a None
+return - litellm has its own independent env-var fallback that this
+function's return value alone doesn't stop.
+
+The shared .env fallback still applies ONLY when there's no brand context
+at all (brand_kit_id=None) - a genuinely brand-less system call, e.g.
+scripts/check_providers.py, which has no brand to have configured a key on
+in the first place.
 """
 
 import uuid
@@ -51,21 +65,27 @@ def clear_user_api_key(db: Session, user_id: uuid.UUID, provider: str) -> None:
 
 def resolve_api_key(db: Session, brand_kit_id: uuid.UUID | None, provider: str) -> str | None:
     """The key to actually use for a generation call against this brand -
-    the brand owner's own key if they've set one, else the shared .env
-    fallback (settings.<provider>_api_key), else None (caller decides how
-    to handle a truly unconfigured provider - ChatProvider lets litellm's
-    own error surface; the image/video providers return None and the
-    caller falls back to a non-AI path)."""
+    the brand owner's own key if they've set one, else None (BYOK is the
+    enforced model - see this module's docstring). The image/video
+    providers (llm/image_provider.py, llm/video_provider.py) already treat
+    None as "not configured" and fall back to a non-AI path on their own,
+    so no further change was needed there; ChatProvider.complete needs an
+    explicit check instead of just reading this return value, since
+    litellm has its own independent env-var fallback (see there).
+
+    brand_kit_id=None (no brand context at all, e.g. scripts/
+    check_providers.py) is the one case that still uses the shared .env
+    key - there's no brand that could have configured its own here."""
     if brand_kit_id is not None:
         brand = db.get(BrandKit, brand_kit_id)
-        if brand:
-            row = (
-                db.query(UserApiKey)
-                .filter(UserApiKey.user_id == brand.owner_user_id, UserApiKey.provider == provider)
-                .first()
-            )
-            if row:
-                return decrypt(row.encrypted_key)
+        if not brand:
+            return None
+        row = (
+            db.query(UserApiKey)
+            .filter(UserApiKey.user_id == brand.owner_user_id, UserApiKey.provider == provider)
+            .first()
+        )
+        return decrypt(row.encrypted_key) if row else None
 
     settings = get_settings()
     attr = _ENV_FALLBACK_ATTR.get(provider)

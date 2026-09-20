@@ -120,6 +120,17 @@ def _build_shotlist(db: Session, content_item: ContentItem) -> list[dict]:
     reel_template = content_item.reel_template or DEFAULT_TEMPLATE
     article_text = content_item.article_full_text or content_item.article_summary or ""
 
+    # Named explicitly, not left implicit from "localized" - found live: with
+    # only a generic "Hindi/Marathi" system-prompt instruction and no
+    # per-item language named anywhere, a Marathi item's narration came back
+    # in Hindi (far more training data, so the model's default guess),
+    # despite content_item.language correctly saying "mr" the whole time.
+    # See build_user_prompt's own docstring-equivalent note for why this has
+    # to live in the user prompt (built fresh per call) rather than the
+    # system prompt (a brand's saved override there is a fixed string with
+    # no way to inject per-item language into it).
+    narration_language_name = _NARRATION_LANGUAGE_NAME.get(language, "English")
+
     examples = get_reel_example_prompts(reel_template, content_item.reel_script or "")
     user_prompt = build_user_prompt(
         content_item.reel_script or "",
@@ -128,6 +139,7 @@ def _build_shotlist(db: Session, content_item: ContentItem) -> list[dict]:
         TEMPLATE_GUIDANCE.get(reel_template, ""),
         content_item.article_title,
         article_text,
+        narration_language_name,
     ) + format_examples_block(examples, subject="this kind of visual scene (borrowed from an image-prompt library, adapt to video)")
 
     provider = ChatProvider(db, content_item.brand_kit_id)

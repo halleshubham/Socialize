@@ -40,15 +40,22 @@ viewer - there is no on-screen text, so narration must carry them, stated exactl
 as given in the article, never paraphrased or invented. Not every scene needs narration - leave \
 "narration" as an empty string only for a silent/ambient pure-visual beat where nothing needs saying."""
 
-NARRATION_GUIDANCE_LOCALIZED = """For each scene, write a short narration line IN THE SAME \
-LANGUAGE as the script/article (Devanagari script) that the video model will speak aloud (Veo generates \
-audio natively, no extra step) - roughly 10-16 words, something a person can say naturally within the \
+NARRATION_GUIDANCE_LOCALIZED = """For each scene, write a short narration line in Hindi/Marathi \
+(Devanagari script) - the post's target language - that the video model will speak aloud (Veo generates \
+audio natively, no extra step). This is the ONE field that's in the target language; the script and \
+character description you were given, and the "description" you write for each scene below, are in \
+English (a visual/production script, not text a viewer reads) - don't let that influence what language \
+you write narration in. Roughly 10-16 words, something a person can say naturally within the \
 scene's ~8 seconds without sounding rushed. Put ONLY the spoken words themselves in "narration" - no \
 "a narrator says" framing, no quotation marks around it, that wrapper (which also tells the video model \
 which language to speak it in) is added automatically afterward. This is the ONLY way facts/quotes/stats \
 reach the viewer - there is no on-screen text, so narration must carry them, stated exactly as given in \
 the article, never paraphrased or invented. Not every scene needs narration - leave "narration" as an \
-empty string only for a silent/ambient pure-visual beat where nothing needs saying."""
+empty string only for a silent/ambient pure-visual beat where nothing needs saying.
+
+Any number/digit within the narration text (a stat, a count, a date, anything) must be written using \
+plain English/Latin numerals (0-9, e.g. "729"), never Devanagari numerals (e.g. "७२९") - even though \
+the rest of the narration is in Devanagari script."""
 
 
 MUSIC_GUIDANCE = """For each scene, also write a short "music" direction - the mood/genre of \
@@ -86,6 +93,11 @@ every single scene's prompt, verbatim or near-verbatim - each scene is generated
 video model with no memory of other scenes, so consistency has to come from repeating the description, \
 not from context.
 
+Write every scene's "description" in English, always - regardless of the post's target language, and \
+even though the script/character description you were given may itself be in English already for this \
+same reason. Veo (the video model) works far more reliably from English visual/composition instructions. \
+Only "narration" (see below) should ever be in the target language - it's the one thing a viewer hears.
+
 Every scene also needs a "location" field: "host" for a scene where the on-camera presenter \
 (explainer_influencer template only) is speaking directly to camera in their studio/home-office \
 setting, or "scene" for anything else (B-roll, graphics, illustrated visuals, cutaways). Templates \
@@ -119,6 +131,7 @@ def build_user_prompt(
     template_guidance: str,
     article_title: str,
     article_text: str,
+    narration_language_name: str = "English",
 ) -> str:
     truncated = article_text[:6000]
     return f"""Reel template: {reel_template} - {template_guidance}
@@ -128,6 +141,14 @@ Script:
 
 Character/subject description (repeat this in every scene):
 {character_description or "(no single character/subject - describe the central visual motif instead)"}
+
+Narration language for this post: {narration_language_name}. Every scene's "narration" must be written \
+in exactly this language - not a related Devanagari language, not whatever language the script/character \
+description above happen to be in (see this system prompt's own note: those are always English, on \
+purpose, regardless of the post's actual target language). Found live: a Marathi post's narration came \
+back in Hindi because nothing told the model which of the two Devanagari languages to use, and Hindi has \
+far more training data, so the model defaulted to it - this line exists specifically to remove that \
+ambiguity, so name it exactly, every time.
 
 Article title: {article_title}
 Article content (for accurate narration of quotes/stats - state it exactly, don't invent numbers):

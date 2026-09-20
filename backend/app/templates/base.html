@@ -50,5 +50,22 @@
   <main class="app-shell">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // Every timestamp is server-rendered in UTC (the DB's real storage
+    // timezone) inside a <time datetime="..."> element, UTC text as the
+    // no-JS fallback - this rewrites the visible text to the viewer's own
+    // local timezone/locale on load, so times read correctly wherever the
+    // person actually viewing the board is, not always UTC. Placed after
+    // the page content in document order (see the main element above), so
+    // every page's local-time elements already exist by the time this
+    // executes - no DOMContentLoaded wrapper needed.
+    document.querySelectorAll('time.local-time').forEach(function (el) {
+      var d = new Date(el.getAttribute('datetime'));
+      if (isNaN(d.getTime())) return;
+      el.textContent = d.toLocaleString(undefined, {
+        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    });
+  </script>
 </body>
 </html>

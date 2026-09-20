@@ -11,6 +11,7 @@ scheduled job.
 import json
 import uuid
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -28,6 +29,23 @@ PROVIDER = "gmail"
 class GmailNotConnected(Exception):
     """Raised when no oauth_credentials row exists yet for 'gmail' scoped to
     this brand - connect it from that brand's Brand Kit page."""
+
+
+class GmailTokenExpired(GmailNotConnected):
+    """Raised when a row DOES exist but the stored refresh token itself is
+    no longer valid (revoked in the user's Google account, or - very common
+    for an OAuth client still in Google's "Testing" publishing status - a
+    refresh token that auto-expires after 7 days). A subclass of
+    GmailNotConnected, not a sibling: found live, load_credentials' own
+    creds.refresh() call had zero exception handling, so a real
+    google.auth.exceptions.RefreshError (invalid_grant: Token has been
+    expired or revoked) propagated all the way up through /board/fetch as
+    an uncaught 500 instead of the same clear "reconnect Gmail" message
+    GmailNotConnected already gets - subclassing means every existing
+    `except GmailNotConnected` catch site (routes_board.py's
+    _fetch_and_redirect) picks this up automatically with no separate catch
+    needed, while still getting an accurate message (this brand WAS
+    connected, unlike the base class's "never connected" case)."""
 
 
 def build_authorization_flow(redirect_uri: str, state: str | None = None, code_verifier: str | None = None) -> Flow:
@@ -103,7 +121,13 @@ def load_credentials(db: Session, brand_kit_id: uuid.UUID) -> Credentials:
     creds = Credentials.from_authorized_user_info(info, GMAIL_READONLY_SCOPES)
 
     if creds.expired and creds.refresh_token:
-        creds.refresh(GoogleAuthRequest())
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except RefreshError as exc:
+            raise GmailTokenExpired(
+                "This brand's Gmail connection has expired or been revoked - reconnect it from the "
+                "Brand Kit page."
+            ) from exc
         save_credentials(db, brand_kit_id, creds)  # persist the rotated access token
 
     return creds

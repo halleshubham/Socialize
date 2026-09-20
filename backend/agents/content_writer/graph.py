@@ -15,7 +15,7 @@ from backend.agents.content_writer.prompts import (
     build_user_prompt_format_only,
 )
 from backend.agents.graphic_designer.templates import DEFAULT_TEMPLATE, TEMPLATE_CHOICES
-from backend.agents.json_utils import extract_json, sanitize_llm_json, truncate_on_word_boundary
+from backend.agents.json_utils import extract_json, normalize_reel_script, sanitize_llm_json, truncate_on_word_boundary
 from backend.agents.languages import DEFAULT_LANGUAGE, display_name
 from backend.agents.reel_editor.templates import DEFAULT_TEMPLATE as DEFAULT_REEL_TEMPLATE
 from backend.agents.reel_editor.templates import TEMPLATE_CHOICES as REEL_TEMPLATE_CHOICES
@@ -137,7 +137,7 @@ def write_copy(db: Session, content_item: ContentItem, revision_feedback: str | 
     template = parsed.get("poster_template")
     content_item.poster_template = template if template in TEMPLATE_CHOICES else DEFAULT_TEMPLATE
     content_item.poster_content = parsed.get("poster_content") or {}
-    content_item.reel_script = parsed.get("reel_script") or None
+    content_item.reel_script = normalize_reel_script(parsed.get("reel_script"))
     content_item.character_description = parsed.get("character_description") or None
     reel_template = parsed.get("reel_template")
     content_item.reel_template = reel_template if reel_template in REEL_TEMPLATE_CHOICES else DEFAULT_REEL_TEMPLATE
@@ -219,7 +219,7 @@ def write_format_fields(db: Session, content_item: ContentItem, format_: str) ->
         content_item.poster_template = template if template in TEMPLATE_CHOICES else DEFAULT_TEMPLATE
         content_item.poster_content = parsed.get("poster_content") or {}
     elif format_ == "reel":
-        content_item.reel_script = parsed.get("reel_script") or None
+        content_item.reel_script = normalize_reel_script(parsed.get("reel_script"))
         content_item.character_description = parsed.get("character_description") or None
         reel_template = parsed.get("reel_template")
         content_item.reel_template = (

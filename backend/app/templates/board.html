@@ -233,7 +233,7 @@
 
     <div class="settings-section">
       <label class="section-label">Gmail fetch window</label>
-      <p class="faint" style="margin:0 0 .5rem">Last fetched: {{ gmail_last_fetch_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+      <p class="faint" style="margin:0 0 .5rem">Last fetched: <time class="local-time" datetime="{{ gmail_last_fetch_at.isoformat() }}">{{ gmail_last_fetch_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></p>
       <form method="post" action="/board/gmail-refetch-since" title="Rewinds the fetch cursor to midnight UTC on this date, then fetches immediately - use this to re-pull older mail on demand">
         <label>Refetch since</label>
         <input type="date" name="since_date" required>
@@ -396,7 +396,7 @@
             <td>{{ email.sender }}</td>
             <td>{{ email.status }}</td>
             <td>{{ email.articles_found if email.articles_found is not none else "-" }}</td>
-            <td>{{ email.created_at }}</td>
+            <td><time class="local-time" datetime="{{ email.created_at.isoformat() }}">{{ email.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></td>
           </tr>
         {% else %}
           <tr><td colspan="5" class="muted">Nothing fetched yet.</td></tr>
@@ -428,6 +428,75 @@
     {% endif %}
   {% endmacro %}
 
+  {# Content Review's "Copy full content" button target - plain readable
+     text (not raw JSON), by design: this exists so a poster's full
+     content or a reel's full script+shot-list can be pasted straight into
+     an external tool (e.g. Google Flow) and be immediately understood,
+     which a JSON blob wouldn't be as directly - see the field labels
+     below, they're meant to read like a brief, not a data dump. #}
+  {% macro copy_payload_text(item) %}
+{%- if item.format == "poster" -%}
+POSTER: {{ item.article_title }}
+Language: {{ item.language }}
+Template: {{ item.poster_template or '' }}
+Headline: {{ item.poster_headline or '' }}
+{% set pc = item.poster_content or {} -%}
+{% if item.poster_template == "quote" -%}
+Quote: {{ pc.quote_text or '' }}
+Attribution: {{ pc.attribution or '' }}
+Citation: {{ pc.citation or '' }}
+{% elif item.poster_template == "tribute" -%}
+Name: {{ pc.name or '' }}
+Achievement: {{ pc.achievement or '' }}
+Quote: {{ pc.quote_text or '' }}
+Tribute line: {{ pc.tribute_line or '' }}
+{% elif item.poster_template == "narrative" -%}
+Body text: {{ pc.body_text or '' }}
+{% elif item.poster_template == "fact_critique" -%}
+{% for f in (pc.facts or []) -%}
+Fact {{ loop.index }}: {{ f.stat }} (Source: {{ f.source }})
+{% endfor -%}
+Critique line: {{ pc.critique_line or '' }}
+{% elif item.poster_template == "trivia" -%}
+Headline: {{ pc.headline or '' }}
+Body text: {{ pc.body_text or '' }}
+Highlight phrases: {{ (pc.highlight_phrases or []) | join(', ') }}
+{% elif item.poster_template == "event" -%}
+Event title: {{ pc.event_title or '' }}
+Date/time: {{ pc.datetime or '' }}
+Location: {{ pc.location or '' }}
+CTA: {{ pc.cta or '' }}
+{% endif %}
+Caption / post description:
+{{ item.copy_text or '' }}
+{% if item.hashtags %}
+Hashtags: {{ item.hashtags | join(' ') }}
+{% endif -%}
+{%- elif item.format == "reel" -%}
+REEL: {{ item.article_title }}
+Language: {{ item.language }}
+Reel style: {{ item.reel_template or '' }}
+Character/Subject (always English - it's a visual/production description, not published text): {{ item.character_description or '' }}
+
+Script:
+{{ item.reel_script or '' }}
+{% if item.reel_scenes %}
+Shot list:
+{% for scene in item.reel_scenes %}
+Scene {{ loop.index }} ({{ scene.timeframe or '' }}){% if scene.location == "host" %} [host]{% endif %}
+Visual: {{ scene.description or '' }}
+Narration ({{ item.language }}): {{ scene.narration or '(silent - no narration this scene)' }}
+Music: {{ scene.music or 'none' }}
+{% endfor %}
+{% endif -%}
+Caption / post description:
+{{ item.copy_text or '' }}
+{% if item.hashtags %}
+Hashtags: {{ item.hashtags | join(' ') }}
+{% endif -%}
+{%- endif -%}
+  {% endmacro %}
+
   {% macro card(item, key, email, media, cost, posts=none) %}
     <div class="kcard {% if item.is_processing %}processing{% elif item.last_error %}errored{% endif %}" data-item-id="{{ item.id }}" data-status="{{ 'processing' if item.is_processing else ('errored' if item.last_error else 'done') }}" onclick="document.getElementById('modal-{{ item.id }}').showModal()">
       <div class="title">{{ item.article_title or "(untitled)" }}</div>
@@ -437,7 +506,7 @@
         <span class="badge badge-danger">Failed - open to retry</span>
       {% elif key == "scheduled" and posts %}
         <div class="snippet">
-          {% for post in posts[:2] %}{{ post.channel_name or post.channel_identifier }} &middot; {{ post.scheduled_at.strftime('%a %d %b, %H:%M') }}{{ " UTC" }}<br>{% endfor %}
+          {% for post in posts[:2] %}{{ post.channel_name or post.channel_identifier }} &middot; <time class="local-time" datetime="{{ post.scheduled_at.isoformat() }}">{{ post.scheduled_at.strftime('%a %d %b, %H:%M') }} UTC</time><br>{% endfor %}
           {% if posts | length > 2 %}+{{ posts | length - 2 }} more&hellip;{% endif %}
         </div>
       {% elif key in ("analyzed", "drafted", "media_generated") and item.brief %}
@@ -543,15 +612,32 @@
         </form>
 
       {% elif key == "drafted" %}
-        <div class="modal-body">{{ item.copy_text }}</div>
-        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
         {% set text_review = item.language in ("hi", "mr") %}
+        {% set copy_text_editable_here = text_review and item.format == "poster" and item.poster_template %}
+        {% if not copy_text_editable_here %}
+          <div class="modal-body">{{ item.copy_text }}</div>
+        {% endif %}
+        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        {% if item.copy_text %}
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now - as a text-only message, no media exists yet?')">
+            <button type="submit" class="btn">Send via WhatsApp (text only, no media yet)</button>
+          </form>
+        {% endif %}
+
+        {% if item.format in ("poster", "reel") %}
+          <textarea id="copy-payload-{{ item.id }}" hidden>{{ copy_payload_text(item) }}</textarea>
+          <div class="actions" style="margin-bottom:.5rem">
+            <button type="button" class="btn" onclick="copyCardContent('{{ item.id }}', this)">📋 Copy full content{{ " (for pasting into Google Flow etc.)" if item.format == "reel" }}</button>
+          </div>
+        {% endif %}
 
         {% if item.format == "poster" %}
           {% if text_review and item.poster_template %}
             {% set pc = item.poster_content or {} %}
             <form method="post" action="/board/{{ item.id }}/edit-poster-content" class="text-review-form">
               <p class="faint">Marathi/Hindi text is AI-drafted and can need fixing - edit it directly here before Approve.</p>
+              <label>Caption (the social post text - kept separate from the poster image itself, edit both here together so they stay consistent)</label>
+              <textarea name="copy_text" rows="4">{{ item.copy_text or '' }}</textarea>
               <label>Poster headline</label>
               <textarea name="poster_headline" rows="1">{{ item.poster_headline or '' }}</textarea>
               {% if item.poster_template == "quote" %}
@@ -622,7 +708,16 @@
         {% endif %}
 
         {% if item.format == "reel" %}
-          {% if item.reel_script %}<p class="muted">Reel script: {{ item.reel_script }}</p>{% endif %}
+          {% if item.reel_script %}
+            <form method="post" action="/board/{{ item.id }}/edit-reel-script" class="text-review-form">
+              <p class="faint">Editing the script clears the shot list below - Regenerate builds a fresh one from the edited script.</p>
+              <label>Reel script</label>
+              <textarea name="reel_script" rows="4">{{ item.reel_script }}</textarea>
+              <label>Character/subject description (repeated in every scene for visual consistency)</label>
+              <textarea name="character_description" rows="2">{{ item.character_description or '' }}</textarea>
+              <button type="submit" class="btn" style="margin-top:.4rem">Save script</button>
+            </form>
+          {% endif %}
           {% if item.reel_scenes %}
             <div class="shotlist-table-wrap">
               <table class="shotlist-table">
@@ -717,6 +812,11 @@
         {{ media_preview(media) }}
         <div class="modal-body">{{ item.copy_text }}</div>
         {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        {% if item.copy_text %}
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return confirm('Send this post (with the media shown above) to your configured WhatsApp recipient now, before Approve?')">
+            <button type="submit" class="btn">Send via WhatsApp</button>
+          </form>
+        {% endif %}
         {% if item.format == "reel" and item.reel_template %}
           <form method="post" action="/board/{{ item.id }}/reel-template">
             <label>Reel style (changing this clears the shot list, so Regenerate builds a fresh one)</label>
@@ -820,7 +920,7 @@
         <p class="muted" style="margin-bottom:.4rem">Scheduled to Postiz:</p>
         {% for post in posts %}
           <div class="scheduled-row">
-            <span>{{ post.channel_name or post.channel_identifier }} <span class="faint">({{ post.channel_identifier }})</span> &middot; {{ post.scheduled_at.strftime('%a %d %b %Y, %H:%M') }} UTC</span>
+            <span>{{ post.channel_name or post.channel_identifier }} <span class="faint">({{ post.channel_identifier }})</span> &middot; <time class="local-time" datetime="{{ post.scheduled_at.isoformat() }}">{{ post.scheduled_at.strftime('%a %d %b %Y, %H:%M') }} UTC</time></span>
             <form method="post" action="/board/{{ item.id }}/postiz-posts/{{ post.postiz_post_id }}/cancel" onsubmit="return confirm('Cancel this scheduled post?')">
               <button type="submit" class="btn btn-sm btn-ghost">Cancel</button>
             </form>
@@ -835,6 +935,9 @@
       {% elif key == "discarded" %}
         <p class="muted">Rationale: {{ item.priority_rationale }}</p>
         {% if item.article_summary %}<div class="modal-body">{{ item.article_summary }}</div>{% endif %}
+        <form method="post" action="/board/{{ item.id }}/restore" class="actions" style="margin-top:.5rem">
+          <button type="submit" class="btn btn-primary">Restore to Needs Review</button>
+        </form>
       {% endif %}
     </dialog>
   {% endmacro %}
@@ -910,6 +1013,22 @@
   </div>
 
   <script>
+    // Reads the hidden textarea a Content Review card renders (server-side,
+    // via the copy_payload_text macro) and puts it on the clipboard -
+    // clicking the button never touches the server, so it can't accidentally
+    // trigger a save/regenerate the way a form submit would.
+    function copyCardContent(itemId, btn) {
+      var el = document.getElementById('copy-payload-' + itemId);
+      if (!el) return;
+      var original = btn.textContent;
+      navigator.clipboard.writeText(el.value).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = original; }, 1500);
+      }).catch(function () {
+        alert('Could not copy automatically - your browser may be blocking clipboard access. Select the text manually instead.');
+      });
+    }
+
     // datetime-local inputs give a naive wall-clock string with no
     // timezone ("2026-09-07T17:55") - sent as-is, the server has no way to
     // know it means the browser's local time, and Postiz was reading it as

@@ -46,11 +46,17 @@ def _build_combined_system_prompt() -> str:
     # response - used only for brands with combined_drafting enabled
     # (agents/orchestrator.py's _analytical_node), so a single cheap call
     # produces everything a normal run would need two LLM calls for.
-    from backend.agents.content_writer.prompts import CAROUSEL_GUIDE, POSTER_TEMPLATE_GUIDE, REEL_TEMPLATE_GUIDE
+    from backend.agents.content_writer.prompts import (
+        CAROUSEL_GUIDE,
+        LATIN_DIGITS_RULE,
+        POSTER_TEMPLATE_GUIDE,
+        REEL_TEMPLATE_GUIDE,
+        REEL_VISUALS_ENGLISH_RULE,
+    )
 
     return f"""You are doing both the Analytical and Content Writing jobs in one pass, in a \
 social-media content pipeline. The Researcher agent has already flagged this specific article \
-as worth posting about. Produce:
+as worth posting about. {LATIN_DIGITS_RULE} Produce:
 
 1. brief: a short, digestible summary (3-6 sentences) of what the article is about, why it \
 matters, and which specific part deserves the most emphasis - for the user's own reading, not \
@@ -73,6 +79,8 @@ single-event story, up to 6 for something genuinely dense).
 - character_description: a concrete visual description of the main subject/character who should \
 appear consistently across the video's scenes - if there's no natural single character/subject, \
 describe the central visual motif instead.
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {REEL_TEMPLATE_GUIDE}
 

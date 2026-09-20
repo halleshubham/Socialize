@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from backend.app.auth.account_deletion import delete_brand
 from backend.app.auth.brand_deps import (
     ACTIVE_BRAND_SESSION_KEY,
     get_accessible_brands,
@@ -121,3 +122,26 @@ def remove_member(
     ).delete()
     db.commit()
     return RedirectResponse(url="/brand-kit", status_code=303)
+
+
+@router.post("/{brand_kit_id}/delete")
+def delete_brand_route(
+    request: Request,
+    confirm_name: str = Form(...),
+    db: Session = Depends(get_db),
+    brand: BrandKit = Depends(get_owned_brand),
+):
+    """Permanently deletes this brand and everything in it - see
+    auth/account_deletion.py's delete_brand. Owner-only (get_owned_brand
+    already 403s a non-owner), and requires re-typing the brand's exact
+    name as a confirmation step, same reasoning a destructive action like
+    this always gets one - there's no undo once delete_brand runs."""
+    if confirm_name.strip() != (brand.brand_name or brand.name):
+        return RedirectResponse(url="/brand-kit?error=Brand name didn't match - nothing was deleted", status_code=303)
+
+    was_active = request.session.get(ACTIVE_BRAND_SESSION_KEY) == str(brand.id)
+    delete_brand(db, brand.id)
+    db.commit()
+    if was_active:
+        request.session.pop(ACTIVE_BRAND_SESSION_KEY, None)
+    return RedirectResponse(url="/board", status_code=303)

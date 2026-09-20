@@ -23,10 +23,19 @@
   <h3>Existing users</h3>
   {% for u in users %}
     <div class="card">
-      <div style="display:flex; align-items:center; gap:.6rem">
+      <div style="display:flex; align-items:center; gap:.6rem; flex-wrap:wrap">
         <span>{{ u.email }}</span>
         {% if u.is_admin %}<span class="badge badge-primary">admin</span>{% endif %}
-        <span class="faint">joined {{ u.created_at }}</span>
+        <span class="badge {{ 'badge-success' if u.is_active else 'badge-danger' }}">{{ "active" if u.is_active else "deactivated" }}</span>
+        <span class="faint">joined <time class="local-time" datetime="{{ u.created_at.isoformat() }}">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></span>
+        {% if u.id != user.id %}
+          <form method="post" action="/admin/users/{{ u.id }}/toggle-active" style="margin:0">
+            <button type="submit" class="btn btn-ghost btn-sm">{{ "Deactivate" if u.is_active else "Reactivate" }}</button>
+          </form>
+          <form method="post" action="/admin/users/{{ u.id }}/delete" style="margin:0" onsubmit="return confirm('Permanently delete {{ u.email }}? This cannot be undone.')">
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+          </form>
+        {% endif %}
       </div>
     </div>
   {% endfor %}

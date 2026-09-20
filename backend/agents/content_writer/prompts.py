@@ -1,3 +1,35 @@
+# Applies whenever generated text ends up in Devanagari (hi/mr) - a no-op for
+# English/other Latin-script languages, so safe to include unconditionally in
+# every prompt variant rather than threading a language check through each
+# one. Found live: a real post's copy_text mixed "729" (Latin) and "१"
+# (Devanagari) for the SAME number across two different sentences - with no
+# instruction either way, the model just picked whichever numeral style felt
+# natural per sentence, inconsistently.
+LATIN_DIGITS_RULE = (
+    "Any number or digit in the text you write - in copy_text, poster content, reel narration/script, "
+    'or carousel headlines/body text - must always use plain English/Latin numerals (0-9, e.g. "729"), '
+    'never native-script numerals (e.g. Devanagari "७२९"), even though the surrounding words are in '
+    "Hindi or Marathi. This applies to every number: statistics, counts, dates, prices, everything."
+)
+
+# reel_script/character_description are a visual/production script for the
+# video-generation model (Veo), not text a viewer ever reads - unlike
+# copy_text/poster_content/carousel text, which ARE what gets published and
+# so must be in the requested language. Found live: with no language
+# instruction here, the model defaulted to writing these in whatever
+# language the rest of the response was in (Devanagari for hi/mr posts),
+# even though Veo - and the shot-listing step that turns this script into
+# per-scene visual prompts (reel_editor/prompts.py) - works far more
+# reliably in English. Only narration (produced later, at shot-listing) is
+# actually spoken/heard, so that's the one reel field that stays in the
+# requested language.
+REEL_VISUALS_ENGLISH_RULE = (
+    "Write reel_script and character_description in English, always - regardless of the requested "
+    "language for this post. They're a visual/production script for the video-generation model, not "
+    "text a viewer reads or hears; only narration (added later, per scene) needs the requested language."
+)
+
+
 REEL_TEMPLATE_GUIDE = """When format is "reel", also pick the single best-fitting reel_template:
 
 - "explainer_influencer": there's a natural single person/figure who can carry the story speaking \
@@ -63,6 +95,8 @@ You're given an analyst's brief about one article, the source content, the user'
 voice/tone, their target language, and the format they've chosen for this post. Write the \
 actual social media content.
 
+{LATIN_DIGITS_RULE}
+
 {hashtag_instruction}
 
 Always produce:
@@ -84,6 +118,8 @@ an abstract closing question. Save the other angle for a future post instead.
 - character_description: a concrete visual description of the main subject/character who should \
 appear consistently across the video's scenes (appearance, clothing, setting) - if the story has \
 no natural single character/subject to focus on, describe the central visual motif instead
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {REEL_TEMPLATE_GUIDE}
 
@@ -150,6 +186,8 @@ design decisions) - never generic filler like "this is a game changer."
 better as plain paragraphs (e.g. a "lessons learned" post is often better as short numbered points).
 - No corporate buzzwords, no excessive emoji, no hard sell.
 
+{LATIN_DIGITS_RULE}
+
 Produce:
 - copy_text: the actual post caption, written in the requested language and tone, in this voice. \
 Should stand alone without needing anything else open.
@@ -166,6 +204,8 @@ something genuinely dense).
 - character_description: a concrete visual description of whoever/whatever should appear \
 consistently across the video's scenes - if there's no natural on-camera figure, describe the \
 central visual motif instead (e.g. a terminal, a diagram, the product UI).
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {REEL_TEMPLATE_GUIDE}
 
@@ -213,6 +253,8 @@ real price, the real category/story framing) - never invent specs or claims not 
 angle is about), then a direct call-to-action (e.g. "Shop now", a price call-out, limited stock).
 - No corporate buzzwords, no excessive emoji, no exaggerated claims.
 
+{LATIN_DIGITS_RULE}
+
 Always produce:
 - copy_text: the actual post caption, written in the requested language and tone, in this voice. \
 Should stand alone without needing anything else open. End with a clear CTA line.
@@ -232,6 +274,8 @@ come away knowing what it is, why it matters, what it costs, and what to do next
 listing) as the visual subject to restate consistently across scenes - there's usually no human \
 character here, describe the product, not a person, unless the listing genuinely centers a model/use \
 of it.
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {CAROUSEL_GUIDE}
 
@@ -285,6 +329,8 @@ copy_text or hashtags. Your only job is to produce the additional field(s) neede
 already-written post into the requested new format, consistent with the existing caption, the \
 brief, and the article content.
 
+{LATIN_DIGITS_RULE}
+
 {POSTER_TEMPLATE_GUIDE}
 
 If the requested format is "reel", produce:
@@ -296,6 +342,8 @@ artificially short script. If the article has more than one real angle, pick the
 throughline and commit to it rather than merging two stories into one script.
 - character_description: a concrete visual description of the main subject/character who should \
 appear consistently across the video's scenes (appearance, clothing, setting)
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {REEL_TEMPLATE_GUIDE}
 
@@ -323,6 +371,8 @@ builder voice, the brief, and the project's real grounding material (README/docs
 Ground every new field in the real specifics given to you (real feature names, real numbers, real design \
 decisions) - never generic filler.
 
+{LATIN_DIGITS_RULE}
+
 {POSTER_TEMPLATE_GUIDE}
 
 If the requested format is "reel", produce:
@@ -333,6 +383,8 @@ genuinely dense).
 - character_description: a concrete visual description of whoever/whatever should appear consistently \
 across the video's scenes - if there's no natural on-camera figure, describe the central visual motif \
 instead (e.g. a terminal, a diagram, the product UI).
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {REEL_TEMPLATE_GUIDE}
 
@@ -352,6 +404,8 @@ product listing (name, category, price, the merchant's own description).
 Ground every new field in the real listing given to you - never invent specs, claims, or a price not in \
 the listing.
 
+{LATIN_DIGITS_RULE}
+
 {POSTER_TEMPLATE_GUIDE}
 For "poster", poster_headline should stay SHORT (a few words) since it typically sits over a real \
 product photo, not a designed background.
@@ -365,6 +419,8 @@ caption - the real feature/story/occasion, the real price if known, and a clear 
 - character_description: describe the product itself (real material/color/print details from the \
 listing) as the visual subject - there's usually no human character here, describe the product unless \
 the listing genuinely centers a model/use of it.
+
+{REEL_VISUALS_ENGLISH_RULE}
 
 {CAROUSEL_GUIDE}
 

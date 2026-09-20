@@ -168,7 +168,7 @@
               <span class="badge {{ 'badge-success' if kit.github_token_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.github_token_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="github_token" placeholder="{{ '••••••••  - leave blank to keep it' if kit.github_token_encrypted else 'Leave blank to use the shared token from .env' }}">
-            <p class="faint">Needs "repo" scope to see private repositories. Public-only works without a token, at GitHub's much lower unauthenticated rate limit.</p>
+            <p class="faint">Get one at <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> - needs "repo" scope to see private repositories. Public-only works without a token, at GitHub's much lower unauthenticated rate limit.</p>
 
             <label>Repos to draft from</label>
             {% if github_repos_available %}
@@ -246,7 +246,7 @@
               <span class="badge {{ 'badge-success' if kit.botsab_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.botsab_api_key_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="botsab_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.botsab_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
-            <p class="faint">This brand's own WhatsApp connection, if it's different from the app's default (.env). Leave both blank to keep using the shared one.</p>
+            <p class="faint">This brand's own WhatsApp connection, if it's different from the app's default (.env). Leave both blank to keep using the shared one. Botsab is self-hosted - see <a href="https://github.com/halleshubham/Botsab" target="_blank" rel="noopener">github.com/halleshubham/Botsab</a> to run your own instance; the instance ID and API key come from that deployment.</p>
             <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save WhatsApp settings</button>
           </form>
         </div>
@@ -260,6 +260,7 @@
               <span class="badge {{ 'badge-success' if kit.postiz_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.postiz_api_key_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="postiz_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.postiz_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
+            <p class="faint">Postiz is self-hosted - see <a href="https://postiz.com" target="_blank" rel="noopener">postiz.com</a> to run your own instance, then generate an API key from its settings.</p>
 
             <label>Channels to post to</label>
             {% if postiz_channels_available %}
@@ -388,6 +389,21 @@
             <p class="faint">The person needs an existing account first — an admin creates one from <a href="/admin/users">Admin</a>.</p>
           </div>
         </section>
+
+        <section id="danger" class="bk-group">
+          <div class="bk-group-heading">
+            <h2>Danger zone</h2>
+            <p>Permanent, unrecoverable actions.</p>
+          </div>
+          <div class="panel" style="border-color: var(--danger)">
+            <h3>Delete this brand</h3>
+            <p class="faint">Permanently deletes every post, draft, generated poster/reel/carousel, and setting for this brand — for every member, not just you. There is no undo. Type the brand's name to confirm.</p>
+            <form method="post" action="/brands/{{ active_brand.id }}/delete" onsubmit="return confirm('This permanently deletes everything in this brand for everyone. Are you sure?')">
+              <input type="text" name="confirm_name" placeholder="Type &quot;{{ active_brand.brand_name or active_brand.name }}&quot; to confirm" required style="margin:0">
+              <button type="submit" class="btn btn-danger" style="margin-top:.6rem">Delete brand permanently</button>
+            </form>
+          </div>
+        </section>
       {% endif %}
 
       <section id="niche" class="bk-group">
@@ -425,7 +441,7 @@
           <div class="card">
             <div style="display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem">
               <span class="badge badge-warning">{{ "Drafted from brand info" if cfg.created_by == "brand_drafted" else "Suggested" }} · v{{ cfg.version }}</span>
-              <span class="faint">{{ cfg.created_at }}</span>
+              <span class="faint"><time class="local-time" datetime="{{ cfg.created_at.isoformat() }}">{{ cfg.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></span>
             </div>
             <p>{{ cfg.prompt_text }}</p>
             <p class="muted">Keywords: {{ cfg.keywords | join(', ') }}</p>
@@ -442,7 +458,7 @@
             <div class="card">
               <div style="display:flex; align-items:center; gap:.5rem; margin-bottom:.4rem">
                 <span class="badge {{ 'badge-primary' if cfg.is_active else 'badge-neutral' }}">v{{ cfg.version }}{{ ' · active' if cfg.is_active else '' }}</span>
-                <span class="faint">{{ cfg.created_by }} · {{ cfg.created_at }}</span>
+                <span class="faint">{{ cfg.created_by }} · <time class="local-time" datetime="{{ cfg.created_at.isoformat() }}">{{ cfg.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></span>
               </div>
               <p>{{ cfg.prompt_text }}</p>
             </div>

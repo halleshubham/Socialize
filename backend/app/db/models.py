@@ -23,6 +23,12 @@ class User(Base):
     # /admin/users "create a user" flow. Only the bootstrapped admin account
     # has this set, unless another admin promotes someone.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Admin-facing abuse-response lever, short of full deletion (deletion
+    # refuses while a user still owns any brand - see auth/account_deletion.py -
+    # deactivation doesn't have that restriction, since it's reversible and
+    # doesn't touch any data). BasicAuthBackend.authenticate checks this
+    # before issuing a session; a deactivated user simply can't log in.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

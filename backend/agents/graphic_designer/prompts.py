@@ -22,6 +22,8 @@ Hard requirements for the prompt you write:
   verbatim and unaltered, quoting it directly in your prompt.
 - The text must end up legible and high-contrast against whatever is behind it.
 - No other text, words, or numbers anywhere else in the image besides that headline.
+- If the headline contains any digit, instruct the model to render it as a plain English/Latin
+  numeral (0-9), never a native-script numeral, even where the rest of the headline is in Devanagari.
 - No rendering of real named individuals' likenesses.
 - Leave the bottom ~10% of the frame visually calm/low-detail - a brand strip gets added there
   afterward and shouldn't fight with busy art.
@@ -81,6 +83,8 @@ Hard requirements for the prompt you write:
   unaltered - not paraphrased, shortened, or reworded - quoting the fields directly in your prompt.
 - High contrast between text and whatever's behind it, in every part of the frame that carries text.
 - No other invented text, words, or numbers beyond what's given below.
+- If any text field contains a digit, instruct the model to render it as a plain English/Latin \
+  numeral (0-9), never a native-script numeral, even where the rest of the text is in Devanagari.
 - No rendering of real named individuals' likenesses.
 - Leave the bottom ~10% of the frame visually calm/low-detail - a brand strip gets added there
   afterward and shouldn't fight with busy art.
@@ -152,6 +156,8 @@ Hard requirements for the prompt you write:
 - If a real price is given below, instruct it to include one bold price/CTA callout (e.g. a bordered \
   box or price-tag graphic, with a short buy-now style call to action) stating that exact price \
   verbatim, never rounded or altered. If no price is given, do not show or invent one.
+- If the headline or price contains a digit, instruct the model to render it as a plain English/Latin \
+  numeral (0-9), never a native-script numeral, even where the rest of the text is in Devanagari.
 - NEVER invent a discount, "% off", coupon code, "limited stock", urgency claim, or any other offer \
   that isn't explicitly given to you below - only ever state real fields you were given.
 - No rendering of real named individuals' likenesses as NEW imagery beyond the reference photo itself \

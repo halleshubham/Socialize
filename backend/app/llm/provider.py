@@ -15,6 +15,20 @@ from sqlalchemy.orm import Session
 from backend.app.db.models import AgentModelConfig, LlmCallLog
 from backend.app.llm.user_keys import resolve_api_key
 
+
+class MissingApiKeyError(Exception):
+    """Raised by ChatProvider.complete when a brand-scoped call has no
+    owner-configured key for the resolved provider - BYOK is the enforced
+    model (see llm/user_keys.py's module docstring), and this is the piece
+    that actually enforces it for chat/LLM calls specifically: litellm has
+    its own independent fallback to the process's ANTHROPIC_API_KEY/
+    OPENAI_API_KEY/GOOGLE_API_KEY env vars whenever no api_key param is
+    passed, so merely omitting it from call_params (what used to happen
+    when resolve_api_key returned None) would silently let litellm pick
+    the shared key back up on its own - simply not passing a key doesn't
+    stop litellm the way it stops the image/video providers, which
+    construct their SDK client directly with a real key or not at all."""
+
 # Fallback defaults if a task has no row yet in agent_model_config.
 # Provider prefixes follow LiteLLM's "<provider>/<model>" convention.
 DEFAULT_MODELS: dict[str, tuple[str, str]] = {
@@ -210,6 +224,11 @@ class ChatProvider:
         api_key = resolve_api_key(self.db, self.brand_kit_id, provider)
         if api_key:
             call_params["api_key"] = api_key
+        elif self.brand_kit_id is not None:
+            raise MissingApiKeyError(
+                f"No {provider} API key configured for this brand - add one on the Account page "
+                f"(/account) before generating content. See the setup guide there for how to get one."
+            )
 
         started = time.monotonic()
         response = litellm.completion(model=model_id, messages=messages, **call_params)

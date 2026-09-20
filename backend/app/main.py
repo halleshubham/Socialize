@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from backend.app.api import (
@@ -17,11 +18,12 @@ from backend.app.api import (
     routes_niche,
 )
 from backend.app.auth.basic import hash_password
-from backend.app.auth.brand_deps import NoBrandAccess
+from backend.app.auth.brand_deps import NoBrandAccess, get_accessible_brands
 from backend.app.auth.deps import NotAuthenticated, get_current_user
 from backend.app.config import get_settings
-from backend.app.db.models import ContentItem, IngestedEmail, IngestedRssItem, SyncState, User
-from backend.app.db.session import SessionLocal
+from backend.app.db.models import BrandKit, ContentItem, IngestedEmail, IngestedRssItem, MediaAsset, SyncState, User
+from backend.app.db.session import SessionLocal, get_db
+from backend.app.middleware.rate_limit import RateLimitMiddleware
 from backend.app.worker.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -153,8 +155,41 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
+_DEFAULT_SECRET_KEY = "dev-secret-change-me"
+if settings.app_env == "production" and settings.app_secret_key == _DEFAULT_SECRET_KEY:
+    # Refuses to boot rather than warn-and-continue - this key signs every
+    # session cookie, so leaving the shipped default in a reachable
+    # deployment means anyone can forge a valid session for any user by
+    # just knowing this same public default value. Only enforced for
+    # APP_ENV=production (default is "development") so the existing local
+    # docker-compose/localhost setup, which never sets APP_ENV, keeps
+    # working unchanged - this is a SaaS-readiness prerequisite, not
+    # something that should affect current personal/local use.
+    raise RuntimeError(
+        "APP_SECRET_KEY is still the default value - set a real, random secret in .env before running "
+        "with APP_ENV=production. Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+
 app = FastAPI(title="Socialize", lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=settings.app_secret_key)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.app_secret_key,
+    # https_only is conditional on APP_ENV, not unconditionally True - this
+    # app's own default/local setup is plain http://localhost (docker-
+    # compose), and an https_only cookie is silently never sent/accepted
+    # over plain HTTP, which would lock out every existing local deployment
+    # the moment this shipped. same_site/max_age are safe to apply
+    # unconditionally: "lax" doesn't break normal top-level navigation
+    # (login redirects, etc.), and a 14-day expiry is just better hygiene
+    # than the previous "never expires" default, in every environment.
+    https_only=settings.app_env == "production",
+    same_site="lax",
+    max_age=14 * 24 * 3600,
+)
+# Added after SessionMiddleware so it wraps outermost (Starlette applies
+# middleware in reverse add order) - rejects an over-quota request before
+# it reaches session/auth handling at all.
+app.add_middleware(RateLimitMiddleware)
 app.mount("/static", StaticFiles(directory="backend/app/static"), name="static")
 
 
@@ -179,16 +214,53 @@ def root():
 
 
 @app.get("/media/{filename}")
-def media(filename: str, user: User = Depends(get_current_user)):
-    """Auth-gated file serving for generated media (posters, later reels) -
-    this is the user's own generated content, not public static assets, so
-    it goes through get_current_user rather than an unauthenticated
-    StaticFiles mount like /static."""
+def media(
+    filename: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Auth-gated file serving for generated media (posters, reels, carousel
+    slides, brand logos) - this is a specific brand's own generated content,
+    not public static assets, so it goes through get_current_user AND an
+    explicit brand-ownership check, not just "is logged in."
+
+    Found live (SaaS-readiness review): this route previously only checked
+    get_current_user - ANY authenticated user of the app, from ANY brand,
+    could fetch ANY other brand's media by requesting its filename directly,
+    with nothing but an unguessable UUID-prefixed name standing in for real
+    access control. Only a real risk once the app has mutually-untrusted
+    tenants (this used to be a personal/small-team tool where every user was
+    already trusted), but a hard blocker before opening self-serve signup.
+    R2 doesn't have this problem the same way - url_for() there only ever
+    generates a presigned URL for an asset the caller's own brand-scoped
+    query already confirmed access to (see routes_board.py); this route is
+    local_disk's equivalent gate, applied at fetch time instead since a raw
+    filename in the URL bypasses whatever query produced it.
+
+    A requested filename is legitimately one of two things (the only two
+    things url_for() is ever called on - see routes_board.py and
+    routes_brand_kit.py): a MediaAsset.storage_uri (poster/reel/carousel
+    slide/character-reference/product-photo, scoped via its content_item's
+    brand_kit_id) or a BrandKit.logo_asset_path (scoped directly). Anything
+    else - or a real match the caller's brands don't include - 404s, not
+    403, so an unauthorized guess can't even confirm the file exists."""
     if "/" in filename or "\\" in filename or filename.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = Path(settings.local_storage_dir) / filename
     if not path.is_file():
         raise HTTPException(status_code=404)
+
+    accessible_ids = {b.id for b in get_accessible_brands(db, user)}
+    asset = db.query(MediaAsset).filter(MediaAsset.storage_uri == filename).first()
+    if asset:
+        content_item = db.get(ContentItem, asset.content_item_id)
+        if not content_item or content_item.brand_kit_id not in accessible_ids:
+            raise HTTPException(status_code=404)
+    else:
+        brand = db.query(BrandKit).filter(BrandKit.logo_asset_path == filename).first()
+        if not brand or brand.id not in accessible_ids:
+            raise HTTPException(status_code=404)
+
     return FileResponse(path)
 
 

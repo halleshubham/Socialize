@@ -40,6 +40,10 @@ given happens to be in a different language. This is the actual text the image m
 each slide, so it's the one thing here that must end up in the right language, not just the article's \
 own framing.
 
+Any number/digit in a headline or body_text (a stat, a count, a date, anything) must be written using \
+plain English/Latin numerals (0-9, e.g. "729"), never native-script numerals (e.g. Devanagari "७२९") - \
+even when the target language is Hindi or Marathi and the rest of the text is in Devanagari script.
+
 Keep slides in narrative order - slide 1 opens the story, the last slide resolves it.
 
 Respond with ONLY a JSON object, no markdown fence, no commentary:
@@ -137,6 +141,8 @@ Hard requirements for the prompt you write:
 - It MUST instruct the model to render the exact headline and body text given to you below, verbatim \
   and unaltered - not paraphrased, shortened, or reworded - quoting them directly in your prompt, with \
   real typographic hierarchy (the headline reads as more important than the body text) within that zone.
+- If the headline or body text contains any digit, instruct the model to render it as a plain English/ \
+  Latin numeral (0-9), never a native-script numeral, even where the rest of the text is in Devanagari.
 - It MUST also instruct the model to render a small sequence indicator in the top-right corner of that \
   same text zone - the slide's position given to you below (e.g. "2/6"), styled small and secondary, \
   much smaller than the headline, so it reads as a page marker rather than content. If this is NOT the \

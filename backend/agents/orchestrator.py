@@ -937,15 +937,19 @@ def rewind_to_content_review(content_item_id: uuid.UUID) -> bool:
 
 
 def rewind_to_needs_review(content_item_id: uuid.UUID) -> bool:
-    """Sends a Content Review/Media Review/Approved card back to Needs
-    Review (analytical_review_gate) - e.g. undoing a "write myself" choice.
-    Always the non-combined gate (regardless of the brand's current
-    combined_drafting setting), since that's Needs Review's own interrupt.
-    No-op if there's no brief to review."""
+    """Sends a Content Review/Media Review/Approved/Discarded card back to
+    Needs Review (analytical_review_gate) - e.g. undoing a "write myself"
+    choice, or restoring a discarded item that got at least as far as
+    having a brief (see restore_content_item below for the no-brief case,
+    which this doesn't cover). Always the non-combined gate (regardless of
+    the brand's current combined_drafting setting), since that's Needs
+    Review's own interrupt. No-op if there's no brief to review."""
     db = SessionLocal()
     try:
         content_item = db.get(ContentItem, content_item_id)
-        if not content_item or content_item.stage not in (Stage.DRAFTED, Stage.MEDIA_GENERATED, Stage.APPROVED):
+        if not content_item or content_item.stage not in (
+            Stage.DRAFTED, Stage.MEDIA_GENERATED, Stage.APPROVED, Stage.DISCARDED,
+        ):
             return False
         if not content_item.brief:
             return False
@@ -970,6 +974,51 @@ def rewind_to_needs_review(content_item_id: uuid.UUID) -> bool:
             "user_feedback": None,
         },
     )
+
+
+def restore_content_item(content_item_id: uuid.UUID) -> bool:
+    """Brings a discarded item back for reconsideration. There was
+    previously no way to do this at all - a discard was permanent.
+
+    Two cases, depending on how far the item got before being discarded:
+    - It has a brief (discarded from Content Review/Media Review/Approved,
+      or straight from Needs Review): just rewind_to_needs_review, which
+      now also accepts Stage.DISCARDED (see its own docstring).
+    - It has no brief at all - discarded straight out of Researcher triage
+      (suitable_for_social=False in create_content_items), which never even
+      ran the graph once, so there's no existing checkpoint thread to
+      re-park. Restarts the SAME graph invocation create_content_items uses
+      for a freshly-suitable article (fetch article -> write brief -> land
+      at Needs Review) instead."""
+    db = SessionLocal()
+    try:
+        content_item = db.get(ContentItem, content_item_id)
+        if not content_item or content_item.stage != Stage.DISCARDED:
+            return False
+        has_brief = bool(content_item.brief)
+        brand_kit_id = content_item.brand_kit_id
+        source_email_id = content_item.source_email_id
+    finally:
+        db.close()
+
+    if has_brief:
+        return rewind_to_needs_review(content_item_id)
+
+    config = {"configurable": {"thread_id": str(content_item_id)}}
+    try:
+        get_graph().invoke(
+            {
+                "content_item_id": content_item_id,
+                "brand_kit_id": brand_kit_id,
+                "source_email_id": source_email_id,
+                "stage": Stage.RESEARCHED,
+            },
+            config,
+        )
+        return True
+    except Exception:
+        logger.exception("Restore-from-discard graph run failed for %s", content_item_id)
+        return False
 
 
 def park_at_media_review(

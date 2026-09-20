@@ -27,7 +27,16 @@ class BasicAuthBackend:
         user_id = request.session.get("user_id")
         if not user_id:
             return None
-        return db.get(User, uuid.UUID(user_id))
+        user = db.get(User, uuid.UUID(user_id))
+        # Checked here too, not just in authenticate() at login time - an
+        # admin deactivating someone mid-session should revoke access
+        # immediately, not just block their NEXT login attempt. A session
+        # cookie now lives up to 14 days (see main.py), so without this
+        # check a deactivated user could keep using the app for the rest
+        # of that window regardless.
+        if user and not user.is_active:
+            return None
+        return user
 
     def login_url(self) -> str:
         return "/login"
@@ -37,5 +46,7 @@ class BasicAuthBackend:
         if not user or not user.hashed_password:
             return None
         if not verify_password(password, user.hashed_password):
+            return None
+        if not user.is_active:
             return None
         return user
