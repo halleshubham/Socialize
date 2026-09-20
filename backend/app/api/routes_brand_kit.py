@@ -17,7 +17,7 @@ from backend.app.integrations.gmail.oauth import is_connected as gmail_is_connec
 from backend.app.integrations.postiz.send import list_brand_channels
 from backend.app.integrations.rss.fetch import add_feed as add_rss_feed
 from backend.app.integrations.rss.fetch import remove_feed as remove_rss_feed
-from backend.app.integrations.woocommerce.source import list_brand_products
+from backend.app.integrations.product_catalog import list_brand_products
 from backend.app.llm.prompt_overrides import clear_prompt_override, get_brand_prompt_overrides, set_prompt_override
 from backend.app.llm.provider import (
     CONFIGURABLE_AGENT_TASKS,
@@ -342,9 +342,10 @@ def update_website(
     user: User = Depends(get_current_user),
     brand: BrandKit = Depends(get_active_brand),
 ):
-    """No credentials to manage - the WooCommerce Store API this reads
-    from is public - so this is just the one URL field, unlike Postiz/
-    GitHub's key-plus-selection panels."""
+    """No credentials to manage - both WooCommerce's Store API and
+    Shopify's /products.json are public (integrations/product_catalog.py
+    tries WooCommerce first, falls back to Shopify) - so this is just the
+    one URL field, unlike Postiz/GitHub's key-plus-selection panels."""
     brand.product_catalog_url = product_catalog_url.strip() or None
     db.commit()
     return RedirectResponse(url="/brand-kit", status_code=303)

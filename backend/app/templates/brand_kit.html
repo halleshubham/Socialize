@@ -218,13 +218,13 @@
 
         <div class="panel">
           <h3>Website / Products</h3>
-          <p class="faint" style="margin-top:-.3rem">A third content source - "Draft from Website" (on the board) drafts posts grounded in a real product's own listing from your store's catalog. Posters/reels use the product's real photo. WooCommerce stores only, for now.</p>
+          <p class="faint" style="margin-top:-.3rem">A third content source - "Draft from Website" (on the board) drafts posts grounded in a real product's own listing from your store's catalog. Posters/reels use the product's real photo. Works with WooCommerce or Shopify stores - detected automatically from the URL, no need to say which.</p>
           <form method="post" action="/brand-kit/website">
             <label>Store URL</label>
             <input type="text" name="product_catalog_url" value="{{ kit.product_catalog_url or '' }}" placeholder="https://yourstore.com">
             <p class="faint">No key needed - this reads your store's own public product API (the same one your storefront's cart uses).</p>
             {% if kit.product_catalog_url %}
-              <p class="faint">{{ website_products_available | length }} product{{ 's' if website_products_available | length != 1 }} found{{ '' if website_products_available else " - check the URL is a live WooCommerce store" }}.</p>
+              <p class="faint">{{ website_products_available | length }} product{{ 's' if website_products_available | length != 1 }} found{{ '' if website_products_available else " - check the URL is a live WooCommerce or Shopify store" }}.</p>
             {% endif %}
             <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save website settings</button>
           </form>

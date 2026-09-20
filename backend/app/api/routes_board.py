@@ -58,7 +58,7 @@ from backend.app.integrations.postiz.auto_schedule import build_schedule_slots
 from backend.app.integrations.postiz.client import PostizError
 from backend.app.integrations.postiz.send import PostizSendError, get_postiz_client
 from backend.app.integrations.postiz.send import send_content_item as send_postiz_content_item
-from backend.app.integrations.woocommerce.source import build_grounding_text, list_brand_products, primary_image_url
+from backend.app.integrations.product_catalog import build_grounding_text, list_brand_products, primary_image_url
 from backend.app.llm.image_provider import IMAGE_MODEL_LABELS, get_image_model_key, set_image_model_key
 from backend.app.llm.video_provider import VIDEO_MODEL_CHOICES
 from backend.app.storage.local_disk import get_storage_backend
@@ -618,8 +618,9 @@ def draft_from_website(
 ):
     """The product-catalog sibling of draft_github_posts - grounds drafts
     in a real product's own listing (name/category/price/description) from
-    the brand's WooCommerce store (see integrations/woocommerce/,
-    researcher/product_angles.py). Live-fetches the product list and
+    the brand's store, WooCommerce or Shopify (see
+    integrations/product_catalog.py, researcher/product_angles.py).
+    Live-fetches the product list and
     matches by id rather than trusting a client-supplied product blob -
     same fast-fail-before-backgrounding split as draft_github_posts (a bad
     catalog URL surfaces immediately, not silently in a background

@@ -20,8 +20,8 @@ def extract_angles(
     extract_angles - same output contract ({title, url, summary,
     suitable_for_social, priority_score, rationale} per item) so it plugs
     directly into orchestrator.py's create_content_items, just grounded in
-    a real WooCommerce product listing instead of a repo's README. Every
-    returned item's url is set to product_url."""
+    a real product listing (WooCommerce or Shopify) instead of a repo's
+    README. Every returned item's url is set to product_url."""
     provider = ChatProvider(db, brand_kit_id)
     system_prompt = resolve_prompt(db, brand_kit_id, "researcher_product_angles", SYSTEM_PROMPT)
     result = provider.complete(

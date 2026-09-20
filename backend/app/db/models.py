@@ -165,10 +165,10 @@ class BrandKit(Base):
     github_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_repos: Mapped[list] = mapped_column(JSONB, default=list)
     # A third content source: an online store's own product catalog (see
-    # integrations/woocommerce/). Just the store's base URL - the
-    # WooCommerce Store API this reads from is public/unauthenticated (it's
-    # what powers the site's own cart), so unlike GitHub there's no token
-    # to store.
+    # integrations/product_catalog.py - tries WooCommerce's Store API
+    # first, falls back to Shopify's /products.json). Just the store's
+    # base URL - both are public/unauthenticated (each is what powers the
+    # site's own cart/theme), so unlike GitHub there's no token to store.
     product_catalog_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # A fourth content source: RSS/Atom feeds - [{"url": "...", "name": "..."}, ...],
     # manually entered (no discovery API like GitHub/WooCommerce have).
