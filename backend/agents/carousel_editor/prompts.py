@@ -1,13 +1,22 @@
 """Carousel Editor prompts: script -> shot list (N slides, 4-6, LLM-decided
-per story density) -> shared background creative-direction -> per-slide
-creative-direction. Mirrors reel_editor's script->shotlist split, but for
-stills.
+per story density, each with its own headline/body_text AND a distinct
+visual) -> a shared text style guide -> per-slide image generation.
 
-Visual consistency across slides comes from generation mechanics, not just
-prompt wording: one shared background image is generated once, then each
-slide is produced by editing that same background (image_provider.py's
-generate_full_design with reference_image=<shared background>), adding only
-that slide's own headline/body_text. See carousel_editor/graph.py.
+Visual consistency across slides comes from a shared STYLE GUIDE folded into
+every slide's own prompt as text (art style, palette, mood, lighting,
+layout/text-zone rules) - not from generating one shared background image
+and editing copies of it. Each slide is a fresh, complete image, depicting
+that slide's own distinct visual, with its own headline/body_text rendered
+onto it in one generation call. See carousel_editor/graph.py.
+
+Earlier version generated one shared no-text background image and edited a
+copy of it per slide, explicitly instructed to preserve that background "as-
+is" - every slide ended up as the literal same scene with different text
+stamped on it, not a real image series. This version drops the shared image
+entirely in favor of shared style language, mirroring how reel_editor keeps
+scenes visually distinct while consistent (each scene gets its own
+`description`; only an identity/continuity anchor is ever reused, never a
+"keep this exact frame" instruction).
 
 No Pillow-drawn content text, same "no programmatic content text" policy as
 posters/reels - each slide's headline/body_text is rendered by the image
@@ -29,16 +38,26 @@ Each slide needs:
   in between advances the story one step rather than restating the same idea.
 - "body_text": one supporting sentence or short line of context for this slide's headline - can be \
   empty string if the headline alone carries the beat fully.
+- "visual": a concrete description of what THIS slide's image should actually show - a specific \
+  setting, object, moment, or visual metaphor drawn from the article's real content, distinct from \
+  every other slide's visual. This is a real picture-series, not one backdrop reused six times - slide \
+  2's image must depict something different from slide 1's, advancing the story visually the same way \
+  the headlines advance it narratively. Ground it in the actual article wherever the article gives you \
+  enough to, don't default to generic stock-photo imagery when a specific real detail is available.
 
 NEVER invent a fact, quote, or number that isn't in the article - state real ones exactly as given, \
 and lean on framing/narrative language rather than invented specifics for anything not actually in the \
-source material.
+source material. "visual" descriptions may depict a scene/moment suggested by the article even if no \
+photo of that exact moment exists (this is illustrative art, not a claim that a photo was taken) - just \
+don't invent factual claims the headline/body_text would assert as true.
 
 Write every slide's "headline" and "body_text" in the target language given to you below - match it \
 exactly, do not translate to English or default to it, even if the script or article content you're \
 given happens to be in a different language. This is the actual text the image model will render onto \
 each slide, so it's the one thing here that must end up in the right language, not just the article's \
-own framing.
+own framing. "visual" is a production instruction for the image model, not published text - always \
+write it in English regardless of the target language above, the same way a reel's scene description \
+stays English while its narration doesn't.
 
 Any number/digit in a headline or body_text (a stat, a count, a date, anything) must be written using \
 plain English/Latin numerals (0-9, e.g. "729"), never native-script numerals (e.g. Devanagari "७२९") - \
@@ -49,7 +68,7 @@ Keep slides in narrative order - slide 1 opens the story, the last slide resolve
 Respond with ONLY a JSON object, no markdown fence, no commentary:
 {
   "slides": [
-    {"headline": "...", "body_text": "..."}
+    {"headline": "...", "body_text": "...", "visual": "..."}
   ]
 }"""
 
@@ -65,49 +84,58 @@ Article title: {article_title}
 Article content (for exact facts/quotes/numbers, don't invent anything beyond this):
 {truncated}
 
-Target language for every slide's headline/body_text: {language_name}
+Target language for every slide's headline/body_text (visual stays English): {language_name}
 
-Return the JSON object now. Between 4 and 6 slides, whatever the story actually needs."""
+Return the JSON object now. Between 4 and 6 slides, whatever the story actually needs - each with its \
+own distinct visual, not a repeated backdrop."""
 
 
-# Shared background: no text at all, just one consistent scene/style that
-# every slide will be generated FROM (via reference-image editing) - the
-# actual mechanism that makes slides look consistent with each other, not
-# just prompt wording alone.
-SYSTEM_PROMPT_BACKGROUND = """You are the creative-direction step of a Carousel Editor agent. You're \
-given one article that's being turned into a multi-slide picture carousel (several still images swiped \
-through in order, telling one complete story) and your job is to write a vivid, SPECIFIC prompt for an \
-image generation model that will produce ONE shared background image - no text, no words, no numbers \
-anywhere in it. This single image will be reused as the visual foundation for every slide in the \
-carousel (each slide is generated by editing a copy of this exact background to add its own text), so \
-it must work as a backdrop for several different pieces of short text across its slides, not just one.
+# Style guide: a text brief, not an image - the mechanism that keeps every
+# slide feeling like one consistent set even though each slide depicts a
+# genuinely different visual. Written once, with the full slide list already
+# in hand, so it can pick one art style/palette/mood that actually works
+# across every one of this carousel's specific visuals.
+SYSTEM_PROMPT_STYLE_GUIDE = """You are the creative-direction step of a Carousel Editor agent. You're \
+given an article being turned into a multi-slide picture carousel, plus the full list of slides already \
+planned (each with its own headline and a distinct visual). Your job is to write a short STYLE GUIDE - \
+not a prompt for any one image, a shared creative brief that will be repeated into every slide's own \
+generation prompt so the whole set reads as one consistent piece of design, even though each slide \
+depicts something different.
 
-Ground the scene in the actual story - a concrete setting, object, or visual metaphor drawn from the \
-article's real content, not a generic abstract concept. Pick ONE coherent art style, color palette, \
-mood, and lighting treatment for the whole carousel - this is the single biggest lever for making all \
-the slides feel like one consistent set rather than unrelated images stitched together. Vary these \
-creative choices from carousel to carousel based on what actually fits each story - two carousels on \
-different articles should look like two different pieces, not the same backdrop style reused.
+Cover, specifically:
+- Art style and rendering technique (e.g. flat vector illustration, moody photographic realism, soft \
+  editorial gouache painting, retro halftone print) - pick ONE and describe it concretely enough that \
+  repeating this description into six different image prompts will actually produce six images that \
+  look like they belong together.
+- Color palette (name actual colors/tones, not just "vibrant" or "muted").
+- Mood and lighting treatment.
+Vary these choices from carousel to carousel based on what actually fits each story - two carousels on \
+different articles should read as two different pieces of design, not the same house style reused.
 
-Hard requirements for the prompt you write:
-- Absolutely NO text, words, numbers, or lettering of any kind anywhere in the image - this is a pure \
-  background, every slide's own text gets added afterward in a separate step.
-- The composition MUST reserve exactly ONE fixed, clearly bounded text zone covering roughly the TOP \
-  30-35% of the frame - deliberately plain, low-detail, and high-contrast-friendly there (a simple \
-  solid/gradient panel, soft blur, or open sky/wall, not the scene's busiest elements). This is not \
-  just "some breathing room" - it must read as a distinct, calm band, clearly separate from the artwork \
-  below it, because every slide's headline and body text will be placed inside this exact same zone and \
-  nowhere else. Put the scene's actual detail/artwork in the remaining ~65-70% of the frame below it.
-- No rendering of real named individuals' likenesses.
-- Leave the bottom ~10% of the frame visually calm/low-detail too - a brand strip gets added there \
+Also state these two fixed technical constraints, which apply identically to every slide and exist so \
+the whole set shares one layout template regardless of what each slide depicts:
+- Every slide reserves a clearly bounded, deliberately plain, high-contrast-friendly text zone covering \
+  the TOP 30-35% of the frame - simple background there (solid/gradient panel, soft blur, open sky/wall, \
+  whatever fits the style), never the slide's busiest visual detail. That zone is where every slide's \
+  headline, body text, and page-sequence indicator get rendered - it must stay visually calm on every \
+  slide so text is always legible there no matter what the rest of the frame depicts.
+- The bottom ~10% of every frame stays visually calm/low-detail too - a brand strip is added there \
   afterward and shouldn't fight with busy art.
 
-Respond with ONLY the image generation prompt itself (3-5 sentences), no preamble, no quotes around \
-your whole answer, no markdown, nothing else."""
+No rendering of real named individuals' likenesses in any slide.
+
+Respond with ONLY the style guide itself (4-6 sentences), no preamble, no quotes around your whole \
+answer, no markdown, nothing else. Write it as direct instructions an image model will receive verbatim \
+alongside each slide's own specific visual."""
 
 
-def build_user_prompt_background(article_title: str, article_text: str, carousel_script: str) -> str:
+def build_style_guide_user_prompt(
+    article_title: str, article_text: str, carousel_script: str, slides: list[dict]
+) -> str:
     truncated = article_text[:4000]
+    slide_list = "\n".join(
+        f"{i + 1}. {s.get('headline', '')} - visual: {s.get('visual', '')}" for i, s in enumerate(slides)
+    )
     return f"""Carousel story/script:
 {carousel_script}
 
@@ -115,29 +143,35 @@ Article title: {article_title}
 Article context:
 {truncated}
 
-Write the shared background image generation prompt now. Remember: no text, no words, no numbers \
-anywhere in it - just the background art/style every slide will share."""
+Planned slides (headline - visual):
+{slide_list}
+
+Write the shared style guide now - the art style/palette/mood that will make all {len(slides)} of these \
+distinct visuals read as one consistent carousel, plus the two fixed layout constraints."""
 
 
-# Per-slide: the shared background is passed as a reference image
-# (image_provider.py's generate_full_design), so this prompt only ever asks
-# for THIS slide's own text to be added on top of it - never a new scene.
+# Per-slide: no reference image, no "preserve as-is" - each slide is a fresh,
+# complete image combining its own distinct visual with its own text, kept
+# consistent with the rest of the carousel purely by repeating the same
+# style guide into every slide's prompt.
 SYSTEM_PROMPT_SLIDE = """You are the creative-direction step of a Carousel Editor agent, writing the \
-prompt for ONE slide of a multi-slide picture carousel. A shared background image (attached separately \
-as a reference image) has already been designed for the whole carousel - your job is to write a prompt \
-for an image-editing-capable model that keeps that background essentially as-is and composes this \
-slide's own headline and body text into it as real, styled typography.
+full image generation prompt for ONE slide of a multi-slide picture carousel. There is no reference \
+image for this slide - you are directing a complete, fresh image: the scene/visual described below, \
+composed with this slide's own text as real styled typography. Consistency with the carousel's other \
+slides comes entirely from following the style guide given to you exactly, not from copying any prior \
+image.
 
 Hard requirements for the prompt you write:
-- Instruct the model to preserve the reference background image as-is - the scene, style, color \
-  palette, lighting, AND its composition/framing/crop - not to repaint, restyle, regenerate, re-crop, \
-  rescale, or shift it. It is the shared visual foundation for every slide in this carousel, being \
-  reused, not a reference sketch for a new image.
-- It MUST instruct the model to place BOTH the headline and body text entirely within the plain text \
-  zone that already exists in the top ~30-35% of the reference background - never overlapping, \
-  extending into, or sitting on top of the artwork/scene below that zone. This exact placement (same \
-  region, same position) is what every other slide in this carousel also uses, so the whole set reads \
-  as one consistent template - do not improvise a different position for this slide.
+- Open by directing the actual scene: render the "visual" description given to you below as the \
+  slide's artwork, specifically and concretely - this is what makes each slide in the carousel look like \
+  a distinct, real image rather than a repeated backdrop.
+- Apply the style guide given to you below exactly - same art style/rendering technique, same color \
+  palette, same mood and lighting - so this slide reads as part of the same set as every other slide in \
+  this carousel.
+- Follow the style guide's two fixed layout constraints precisely: reserve its described plain text zone \
+  in the top of the frame for this slide's own headline, body text, and sequence indicator (nothing else \
+  goes there, and none of the scene's artwork extends into it), and keep the bottom of the frame calm/ \
+  low-detail per the style guide (a brand strip goes there afterward).
 - It MUST instruct the model to render the exact headline and body text given to you below, verbatim \
   and unaltered - not paraphrased, shortened, or reworded - quoting them directly in your prompt, with \
   real typographic hierarchy (the headline reads as more important than the body text) within that zone.
@@ -148,22 +182,24 @@ Hard requirements for the prompt you write:
   much smaller than the headline, so it reads as a page marker rather than content. If this is NOT the \
   final slide, the indicator MUST also include a right-pointing arrow glyph or arrow shape immediately \
   after the number, signalling more slides follow when swiped. If this IS the final slide, show only \
-  the number, no arrow. Use the same small style/position for this indicator on every slide, so it \
-  reads as one consistent page-counter across the whole carousel.
-- High contrast between the text and whatever's behind it.
+  the number, no arrow.
+- High contrast between the text and whatever's behind it in that zone.
 - No other invented text, words, or numbers anywhere else in the image besides that headline, body \
   text, and the sequence indicator.
-- No rendering of real named individuals' likenesses as new imagery beyond what the background already \
-  has.
-- Leave the bottom ~10% of the frame visually calm/low-detail - a brand strip gets added there \
-  afterward and shouldn't fight with busy art.
+- No rendering of real named individuals' likenesses.
 
-Respond with ONLY the image generation prompt itself (3-5 sentences), no preamble, no quotes around \
+Respond with ONLY the image generation prompt itself (4-6 sentences), no preamble, no quotes around \
 your whole answer, no markdown, nothing else."""
 
 
 def build_user_prompt_slide(
-    headline: str, body_text: str, slide_number: int, slide_count: int, article_title: str
+    style_guide: str,
+    visual: str,
+    headline: str,
+    body_text: str,
+    slide_number: int,
+    slide_count: int,
+    article_title: str,
 ) -> str:
     is_last = slide_number == slide_count
     sequence_note = (
@@ -171,17 +207,17 @@ def build_user_prompt_slide(
         if is_last
         else f'Sequence indicator to render: "{slide_number}/{slide_count}" followed by a right-pointing arrow.'
     )
-    return f"""A shared background image is attached separately as your visual reference.
-
-{sequence_note}
+    return f"""Style guide for this whole carousel (apply exactly):
+{style_guide}
 
 This is slide {slide_number} of {slide_count} in the carousel.
+This slide's visual (what the image should actually show): {visual}
 Headline to render (verbatim): "{headline}"
 Body text to render (verbatim, may be empty): "{body_text}"
+{sequence_note}
 
 Article title (for grounding only, not to be quoted): {article_title}
 
-Write the image generation prompt now. Remember to instruct the model to preserve the reference \
-background as-is, keep the headline, body text, and sequence indicator confined to the reserved top \
-text zone only (never over the artwork), and render the headline/body text verbatim as styled \
-typography with the small sequence indicator in that zone's top-right corner."""
+Write the image generation prompt now: direct the specific visual above, rendered in the style guide's \
+art style/palette/mood, with the headline/body text and sequence indicator composed into the reserved \
+text zone as styled typography."""

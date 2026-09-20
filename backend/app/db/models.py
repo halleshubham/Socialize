@@ -538,7 +538,12 @@ class MediaAsset(Base):
     content_item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("content_items.id"), nullable=False
     )
-    # "poster" | "reel" | "carousel_background" | "carousel_slide" | "product_photo" | "character_reference"
+    # "poster" | "reel" | "carousel_slide" | "product_photo" | "character_reference"
+    # ("carousel_background" is a legacy value - older carousels generated a
+    # shared background image and edited copies of it; current carousels
+    # generate each slide as a fresh, complete image instead, see
+    # carousel_editor/graph.py - old rows with this asset_type may still
+    # exist in the database but nothing writes new ones.)
     asset_type: Mapped[str] = mapped_column(String(30), nullable=False)
     storage_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
     generation_model: Mapped[str | None] = mapped_column(String(150), nullable=True)

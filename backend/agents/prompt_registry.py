@@ -29,9 +29,9 @@ from backend.agents.graphic_designer.prompts import SYSTEM_PROMPT_FULL_DESIGN as
 from backend.agents.graphic_designer.prompts import (
     SYSTEM_PROMPT_PRODUCT_PHOTO_DESIGN as _GRAPHIC_DESIGNER_PRODUCT_PHOTO,
 )
-from backend.agents.carousel_editor.prompts import SYSTEM_PROMPT_BACKGROUND as _CAROUSEL_BACKGROUND
 from backend.agents.carousel_editor.prompts import SYSTEM_PROMPT_SHOTLIST as _CAROUSEL_SHOTLIST
 from backend.agents.carousel_editor.prompts import SYSTEM_PROMPT_SLIDE as _CAROUSEL_SLIDE
+from backend.agents.carousel_editor.prompts import SYSTEM_PROMPT_STYLE_GUIDE as _CAROUSEL_STYLE_GUIDE
 from backend.agents.reel_editor.prompts import SYSTEM_PROMPT as _REEL_SHOTLIST
 from backend.agents.reel_editor.prompts import SYSTEM_PROMPT_LOCALIZED as _REEL_SHOTLIST_LOCALIZED
 from backend.agents.researcher.github_angle_prompts import SYSTEM_PROMPT as _RESEARCHER_GITHUB
@@ -149,10 +149,10 @@ PROMPT_SLOTS: dict[str, dict[str, str]] = {
         "group": "Carousel Editor",
         "default": _CAROUSEL_SHOTLIST,
     },
-    "carousel_background": {
-        "label": "Shared background",
+    "carousel_style_guide": {
+        "label": "Shared style guide",
         "group": "Carousel Editor",
-        "default": _CAROUSEL_BACKGROUND,
+        "default": _CAROUSEL_STYLE_GUIDE,
     },
     "carousel_slide": {
         "label": "Per-slide design",
@@ -203,8 +203,7 @@ GUARDRAIL_PHRASES: dict[str, list[tuple[str, str]]] = {
     "carousel_shotlist": [
         ("invent a fact", "never invent a fact, quote, or number"),
     ],
-    "carousel_background": [
-        ("no text", "absolutely no text/words/numbers in the shared background"),
+    "carousel_style_guide": [
         ("real named individuals", "no rendering of real named individuals' likeness"),
     ],
     "carousel_slide": [

@@ -1,9 +1,8 @@
-"""Carousel Editor pipeline: script -> shot list (4-6 slides, LLM-decided) ->
-one shared background image -> per-slide image generation, each produced by
-editing a copy of that same shared background (image_provider.py's
-generate_full_design with reference_image=<shared background>) so every
-slide keeps the same art style/scene/palette, with only that slide's own
-headline/body_text composed on top.
+"""Carousel Editor pipeline: script -> shot list (4-6 slides, LLM-decided,
+each with its own headline/body_text AND a distinct visual) -> a shared text
+style guide -> per-slide image generation, each slide a fresh, complete
+image (scene + its own text) rather than a shared background edited per
+slide.
 
 Nothing here is ever Pillow-drawn beyond branding (add_brand_strip) and
 source attribution (add_source_line) - each slide's headline/body_text is
@@ -11,14 +10,14 @@ rendered by the image model itself, verbatim, or not shown at all. See
 docs/architecture.md's "no programmatic content text" policy.
 
 Error-handling policy (mirrors graphic_designer/graph.py::generate_poster):
-- No image provider configured, or the shared background generation call
-  fails: propagate. There is nothing to fall back to - a "carousel" made of
-  blank branded cards would silently look finished but isn't.
-- An individual slide's reference-image edit failing (after the shared
-  background succeeded): soft failure, falls back to that slide being just
-  the shared background + brand strip (still on-theme, still a real slide)
-  rather than discarding the whole carousel over one bad slide - same
-  reasoning as the product-photo poster's soft-failure branch.
+- No image provider configured: propagate. There is nothing to build the
+  carousel from.
+- The style guide LLM call failing: propagate - without it, slides would
+  have nothing keeping them visually consistent with each other.
+- An individual slide's image generation failing: soft failure, falls back
+  to a neutral-gradient branded card for that one slide (no AI content
+  text, same as a poster's "no provider" fallback) rather than discarding
+  the whole carousel over one bad slide.
 """
 
 import logging
@@ -26,11 +25,11 @@ import logging
 from sqlalchemy.orm import Session
 
 from backend.agents.carousel_editor.prompts import (
-    SYSTEM_PROMPT_BACKGROUND,
     SYSTEM_PROMPT_SHOTLIST,
     SYSTEM_PROMPT_SLIDE,
+    SYSTEM_PROMPT_STYLE_GUIDE,
     build_shotlist_user_prompt,
-    build_user_prompt_background,
+    build_style_guide_user_prompt,
     build_user_prompt_slide,
 )
 from backend.agents.graphic_designer.layout import add_brand_strip, add_source_line, render_fallback_poster
@@ -97,16 +96,15 @@ def _build_carousel_shotlist(db: Session, content_item: ContentItem) -> list[dic
     return slides
 
 
-def _craft_background_prompt(db: Session, content_item: ContentItem, image_model_key: str) -> str:
+def _craft_style_guide(db: Session, content_item: ContentItem, slides: list[dict]) -> str:
     article_text = content_item.article_full_text or content_item.article_summary or ""
-    examples = get_example_prompts(image_model_key, DEFAULT_CATEGORY, content_item.carousel_script or "")
-    user_prompt = build_user_prompt_background(
-        content_item.article_title, article_text, content_item.carousel_script or ""
-    ) + format_examples_block(examples)
+    user_prompt = build_style_guide_user_prompt(
+        content_item.article_title, article_text, content_item.carousel_script or "", slides
+    )
 
     provider = ChatProvider(db, content_item.brand_kit_id)
     system_prompt = resolve_prompt(
-        db, content_item.brand_kit_id, "carousel_background", SYSTEM_PROMPT_BACKGROUND
+        db, content_item.brand_kit_id, "carousel_style_guide", SYSTEM_PROMPT_STYLE_GUIDE
     )
     result = provider.complete(
         agent_task="carousel_direction",
@@ -116,12 +114,17 @@ def _craft_background_prompt(db: Session, content_item: ContentItem, image_model
         ],
         content_item_id=content_item.id,
     )
-    return result.text.strip() or f"Background art for: {content_item.article_title}. No text anywhere."
+    return result.text.strip() or (
+        "Flat, high-contrast editorial illustration style, muted neutral palette, soft even lighting. "
+        "Every slide reserves a plain top 30-35% text zone and keeps the bottom 10% calm for a brand strip."
+    )
 
 
 def _craft_slide_prompt(
     db: Session,
     content_item: ContentItem,
+    style_guide: str,
+    visual: str,
     headline: str,
     body_text: str,
     slide_number: int,
@@ -130,7 +133,7 @@ def _craft_slide_prompt(
 ) -> str:
     examples = get_example_prompts(image_model_key, DEFAULT_CATEGORY, headline)
     user_prompt = build_user_prompt_slide(
-        headline, body_text, slide_number, slide_count, content_item.article_title
+        style_guide, visual, headline, body_text, slide_number, slide_count, content_item.article_title
     ) + format_examples_block(examples)
 
     provider = ChatProvider(db, content_item.brand_kit_id)
@@ -144,8 +147,8 @@ def _craft_slide_prompt(
         content_item_id=content_item.id,
     )
     return result.text.strip() or (
-        f'Render the background as-is, adding the headline "{headline}" and body text "{body_text}" '
-        "as styled typography. No other text."
+        f"{visual} Rendered in the carousel's shared style. Add the headline \"{headline}\" and body "
+        f'text "{body_text}" as styled typography in the top text zone. No other text.'
     )
 
 
@@ -184,72 +187,40 @@ def generate_carousel(db: Session, content_item: ContentItem) -> list[MediaAsset
     storage = get_storage_backend()
     total_cost = 0.0
 
-    # Reused across retries rather than regenerated every time, same
-    # reasoning as reel_editor's character_reference caching - the shared
-    # background is what makes slides consistent, so a retry after a
-    # partial failure should keep using the same one, not pay for and
-    # generate a visually different background.
-    existing_background = (
-        db.query(MediaAsset)
-        .filter(MediaAsset.content_item_id == content_item.id, MediaAsset.asset_type == "carousel_background")
-        .order_by(MediaAsset.created_at.desc())
-        .first()
-    )
-    background_bytes = None
-    if existing_background:
-        try:
-            background_bytes = storage.load(existing_background.storage_uri)
-        except Exception:
-            logger.exception("Could not load cached carousel background, will regenerate")
-
-    if background_bytes is None:
-        # No fallback here - if this fails, there is nothing to build the
-        # carousel from, so let it propagate (routes_board.py's
-        # _run_with_processing_state surfaces it via content_item.last_error).
-        background_prompt = _craft_background_prompt(db, content_item, image_model_key)
-        background_bytes = provider.generate_background(
-            prompt=background_prompt, width=1080, height=1080, model=image_model
-        )
-        total_cost += image_model_cost
-        background_uri = storage.save(background_bytes, f"{content_item.id}_carousel_background.png")
-        db.add(
-            MediaAsset(
-                content_item_id=content_item.id,
-                asset_type="carousel_background",
-                storage_uri=background_uri,
-                generation_model=image_model,
-                generation_prompt=background_prompt,
-                cost_usd=image_model_cost,
-            )
-        )
-        db.commit()
+    # One shared brief, computed once per run and repeated into every
+    # slide's own prompt below - this (not a shared reference image) is
+    # what keeps the set feeling like one consistent carousel even though
+    # each slide depicts a genuinely different visual. No fallback here -
+    # if this fails, propagate; without it slides have nothing tying their
+    # styles together (routes_board.py's _run_with_processing_state
+    # surfaces it via content_item.last_error).
+    style_guide = _craft_style_guide(db, content_item, slides)
 
     assets: list[MediaAsset] = []
     slide_count = len(slides)
     for i, slide in enumerate(slides):
         headline = slide.get("headline", "")
         body_text = slide.get("body_text", "")
+        visual = slide.get("visual", "")
 
         try:
             slide_prompt = _craft_slide_prompt(
-                db, content_item, headline, body_text, i + 1, slide_count, image_model_key
+                db, content_item, style_guide, visual, headline, body_text, i + 1, slide_count, image_model_key
             )
             full_slide_bytes = provider.generate_full_design(
                 prompt=slide_prompt,
                 width=1080,
                 height=1080,
                 model=image_model,
-                reference_image=background_bytes,
             )
             total_cost += image_model_cost
             slide_cost = image_model_cost
             generation_prompt = slide_prompt
         except Exception:
-            # Soft failure - fall back to the shared background + brand
-            # strip only for this one slide (still on-theme, still a real
-            # image) rather than discarding the whole carousel over one bad
-            # slide, same reasoning as generate_poster's product-photo
-            # branch.
+            # Soft failure - fall back to a neutral branded card for this
+            # one slide (no AI content text, same as a poster's "no
+            # provider" fallback) rather than discarding the whole carousel
+            # over one bad slide.
             logger.exception("Carousel slide %d/%d generation failed, falling back to a blank slide", i + 1, slide_count)
             full_slide_bytes = None
             slide_cost = 0.0
@@ -271,7 +242,6 @@ def generate_carousel(db: Session, content_item: ContentItem) -> list[MediaAsset
                 brand_name=brand_name,
                 social_handles=social_handles,
                 website_url=website_url,
-                background_bytes=background_bytes,
                 logo_bytes=logo_bytes,
                 show_brand_name=show_brand_name,
             )
