@@ -22,6 +22,18 @@
     /* dialog.settings-modal / .modal-close base styling now lives in
        design-system.css, shared with the base.html brand switcher dialog. */
 
+    /* #settings-modal specifically (not the shared .settings-modal class,
+       which github-draft-modal/website-draft-modal/auto-schedule-modal also
+       use for unrelated content) - groups its 6 previously-flat settings
+       into themed clusters, and gives Auto Mode a distinct warning-toned
+       panel since it's the one setting here that can generate AND send
+       content with zero human review, unlike everything else in this
+       dialog which just changes a default. */
+    #settings-modal .settings-group-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); margin: 1.3rem 0 .2rem; }
+    #settings-modal .settings-group-label:first-of-type { margin-top: 0; }
+    #settings-modal .settings-section.automation { border: 1px solid var(--warning); border-radius: var(--radius-sm); padding: .7rem .8rem; margin-top: .3rem; background: color-mix(in srgb, var(--warning) 8%, transparent); }
+    #settings-modal .settings-section.automation:first-of-type { padding: .7rem .8rem; }
+
     details.emails-panel { margin-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; background: var(--bg-raised); }
     details.emails-panel summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
     .emails-table-wrap { overflow-x: auto; margin-top: .6rem; }
@@ -259,6 +271,8 @@
     <button type="button" class="modal-close" onclick="document.getElementById('settings-modal').close()">✕</button>
     <h2>Settings</h2>
 
+    <div class="settings-group-label">Content lifecycle</div>
+
     <div class="settings-section">
       <label class="section-label">Gmail fetch window</label>
       <p class="faint" style="margin:0 0 .5rem">Last fetched: <time class="local-time" datetime="{{ gmail_last_fetch_at.isoformat() }}">{{ gmail_last_fetch_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></p>
@@ -279,6 +293,8 @@
       </form>
       <p class="hint">A daily background job permanently deletes discarded cards (and their generated media) once they've been discarded longer than this. Set to 0 to keep discarded cards forever.</p>
     </div>
+
+    <div class="settings-group-label">Generation</div>
 
     <div class="settings-section">
       <label class="section-label">Reel cost cap</label>
@@ -313,8 +329,10 @@
       <p class="hint">Applies to posters (full-design, product-photo, legacy background) and reel character references.</p>
     </div>
 
-    <div class="settings-section">
-      <label class="section-label">Auto mode</label>
+    <div class="settings-group-label">Automation</div>
+
+    <div class="settings-section automation">
+      <label class="section-label">Auto mode <span class="badge badge-warning" style="font-size:.65rem">Skips review</span></label>
       <form method="post" action="/board/auto-mode" title="Skips Needs Review, Content Review, AND Media Review for high-scoring items - generates a poster/reel and auto-approves it with zero clicks.">
         <label><input type="checkbox" name="enabled" style="width:auto; margin:0" {% if auto_mode.enabled %}checked{% endif %}> Enabled</label>
         <label>min score</label>
@@ -327,7 +345,7 @@
         <label title="Also sends via WhatsApp automatically once approved - with this off, items still land on Approved with zero clicks, you just click Send yourself."><input type="checkbox" name="auto_send" style="width:auto; margin:0" {% if auto_mode.auto_send %}checked{% endif %}> Auto-send via WhatsApp</label>
         <button type="submit" class="btn btn-sm">Save</button>
       </form>
-      <p class="hint">Generates, approves, and (if "Auto-send" is checked) sends via WhatsApp with zero clicks for items clearing the score threshold - nothing is reviewed by you before it goes out.</p>
+      <p class="hint">Generates, approves, and (if "Auto-send" is checked) sends via WhatsApp with zero clicks for items clearing the score threshold - <strong>nothing is reviewed by you before it goes out.</strong></p>
     </div>
   </dialog>
 
@@ -433,545 +451,8 @@
     </div>
   </details>
 
-  {% macro priority_dot(score) %}
-    {% if score is not none %}
-      {% set color = "var(--success)" if score >= 0.7 else ("var(--warning)" if score >= 0.4 else "var(--text-faint)") %}
-      <span class="dot" style="background:{{ color }}" title="priority {{ '%.2f' | format(score) }}"></span>
-    {% endif %}
-  {% endmacro %}
+  {% import "board_card_macros.html" as cm %}
 
-  {% macro media_preview(media) %}
-    {% if media %}
-      {% if media[1] == "reel" %}
-        <video class="media-preview" src="{{ media[0] }}" controls playsinline></video>
-      {% elif media[1] == "carousel" %}
-        <div class="carousel-preview">
-          {% for url in media[0] %}
-            <img class="media-preview" src="{{ url }}" alt="Generated carousel slide {{ loop.index }}">
-          {% endfor %}
-        </div>
-      {% else %}
-        <img class="media-preview" src="{{ media[0] }}" alt="Generated media">
-      {% endif %}
-    {% endif %}
-  {% endmacro %}
-
-  {# Content Review's "Copy full content" button target - plain readable
-     text (not raw JSON), by design: this exists so a poster's full
-     content or a reel's full script+shot-list can be pasted straight into
-     an external tool (e.g. Google Flow) and be immediately understood,
-     which a JSON blob wouldn't be as directly - see the field labels
-     below, they're meant to read like a brief, not a data dump. #}
-  {% macro copy_payload_text(item) %}
-{%- if item.format == "poster" -%}
-POSTER: {{ item.article_title }}
-Language: {{ item.language }}
-Template: {{ item.poster_template or '' }}
-Headline: {{ item.poster_headline or '' }}
-{% set pc = item.poster_content or {} -%}
-{% if item.poster_template == "quote" -%}
-Quote: {{ pc.quote_text or '' }}
-Attribution: {{ pc.attribution or '' }}
-Citation: {{ pc.citation or '' }}
-{% elif item.poster_template == "tribute" -%}
-Name: {{ pc.name or '' }}
-Achievement: {{ pc.achievement or '' }}
-Quote: {{ pc.quote_text or '' }}
-Tribute line: {{ pc.tribute_line or '' }}
-{% elif item.poster_template == "narrative" -%}
-Body text: {{ pc.body_text or '' }}
-{% elif item.poster_template == "fact_critique" -%}
-{% for f in (pc.facts or []) -%}
-Fact {{ loop.index }}: {{ f.stat }} (Source: {{ f.source }})
-{% endfor -%}
-Critique line: {{ pc.critique_line or '' }}
-{% elif item.poster_template == "trivia" -%}
-Headline: {{ pc.headline or '' }}
-Body text: {{ pc.body_text or '' }}
-Highlight phrases: {{ (pc.highlight_phrases or []) | join(', ') }}
-{% elif item.poster_template == "event" -%}
-Event title: {{ pc.event_title or '' }}
-Date/time: {{ pc.datetime or '' }}
-Location: {{ pc.location or '' }}
-CTA: {{ pc.cta or '' }}
-{% endif %}
-Caption / post description:
-{{ item.copy_text or '' }}
-{% if item.hashtags %}
-Hashtags: {{ item.hashtags | join(' ') }}
-{% endif -%}
-{%- elif item.format == "reel" -%}
-REEL: {{ item.article_title }}
-Language: {{ item.language }}
-Reel style: {{ item.reel_template or '' }}
-Character/Subject (always English - it's a visual/production description, not published text): {{ item.character_description or '' }}
-
-Script:
-{{ item.reel_script or '' }}
-{% if item.reel_scenes %}
-Shot list:
-{% for scene in item.reel_scenes %}
-Scene {{ loop.index }} ({{ scene.timeframe or '' }}){% if scene.location == "host" %} [host]{% endif %}
-Visual: {{ scene.description or '' }}
-Narration ({{ item.language }}): {{ scene.narration or '(silent - no narration this scene)' }}
-Music: {{ scene.music or 'none' }}
-{% endfor %}
-{% endif -%}
-Caption / post description:
-{{ item.copy_text or '' }}
-{% if item.hashtags %}
-Hashtags: {{ item.hashtags | join(' ') }}
-{% endif -%}
-{%- endif -%}
-  {% endmacro %}
-
-  {% macro card(item, key, email, media, cost, posts=none) %}
-    <div class="kcard {% if item.is_processing %}processing{% elif item.last_error %}errored{% endif %}" data-item-id="{{ item.id }}" data-status="{{ 'processing' if item.is_processing else ('errored' if item.last_error else 'done') }}" onclick="document.getElementById('modal-{{ item.id }}').showModal()">
-      <div class="title">{{ item.article_title or "(untitled)" }}</div>
-      {% if item.is_processing %}
-        <span class="badge badge-warning"><span class="spinner spinner-sm" aria-hidden="true"></span> Working&hellip;</span>
-      {% elif item.last_error %}
-        <span class="badge badge-danger">Failed - open to retry</span>
-      {% elif key == "scheduled" and posts %}
-        <div class="snippet">
-          {% for post in posts[:2] %}{{ post.channel_name or post.channel_identifier }} &middot; <time class="local-time" datetime="{{ post.scheduled_at.isoformat() }}">{{ post.scheduled_at.strftime('%a %d %b, %H:%M') }} UTC</time><br>{% endfor %}
-          {% if posts | length > 2 %}+{{ posts | length - 2 }} more&hellip;{% endif %}
-        </div>
-      {% elif key in ("analyzed", "drafted", "media_generated") and item.brief %}
-        <div class="snippet">{{ item.copy_text or item.brief }}</div>
-      {% elif key == "discarded" and item.priority_rationale %}
-        <div class="snippet">{{ item.priority_rationale }}</div>
-      {% endif %}
-      <div class="icon-row">
-        {{ priority_dot(item.priority_score) }}
-        {% if item.article_url %}<span title="has article link">&#128279;</span>{% endif %}
-        {% if media %}<span title="has generated media">{{ "🎬" if media[1] == "reel" else ("🎠" if media[1] == "carousel" else "🖼️") }}</span>{% endif %}
-        {% if item.format %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.format }}</span>{% endif %}
-        {% if item.format and item.language and item.language != "en" %}<span class="badge badge-neutral" style="font-size:.65rem">{{ item.language }}</span>{% endif %}
-        {% if email %}<span title="{{ email.sender }}">&#9993; {{ email.sender.split('<')[0].strip()[:18] }}</span>{% endif %}
-        {% if cost %}<span class="badge badge-neutral" style="font-size:.65rem" title="Total LLM + media generation cost so far">${{ '%.2f' | format(cost) }}</span>{% endif %}
-      </div>
-    </div>
-
-    <dialog class="kmodal" id="modal-{{ item.id }}">
-      <button class="modal-close" onclick="document.getElementById('modal-{{ item.id }}').close()" aria-label="Close">&times;</button>
-      <h2>{{ item.article_title or "(untitled)" }}</h2>
-      <div class="modal-meta">
-        {% if email %}From {{ email.sender }} &middot; email subject: {{ email.subject }}<br>{% endif %}
-        {% if item.priority_score is not none %}Priority {{ "%.2f" | format(item.priority_score) }}{% endif %}
-        {% if item.article_url %} &middot; <a href="{{ item.article_url }}" target="_blank" rel="noopener">open article &#8599;</a>{% endif %}
-      </div>
-
-      {% if item.is_processing %}
-        <div class="processing-state">
-          <span class="spinner" aria-hidden="true"></span>
-          <p class="muted" style="margin:0">Working on this - poster/text generation usually takes seconds, a reel scene can take a few minutes. Close this and keep browsing; the card updates on its own when it's done.</p>
-        </div>
-
-      {% elif item.last_error and item.stage != "approved" %}
-        <div class="error-box">{{ item.last_error }}</div>
-        <div class="actions">
-          {% if item.stage == "analyzed" %}
-          <form method="post" action="/board/{{ item.id }}/retry-content-writer">
-          {% elif item.format == "reel" %}
-          <form method="post" action="/board/{{ item.id }}/retry-reel">
-          {% elif item.format == "carousel" %}
-          <form method="post" action="/board/{{ item.id }}/retry-carousel">
-          {% else %}
-          <form method="post" action="/board/{{ item.id }}/retry-poster">
-          {% endif %}
-            <button type="submit" class="btn btn-primary">Retry</button>
-          </form>
-          <form method="post" action="/board/{{ item.id }}/discard">
-            <button type="submit" class="btn btn-danger">Discard</button>
-          </form>
-        </div>
-
-      {% elif key == "researched" %}
-        <p class="muted">Fetching the article and writing a brief - refresh in a moment. If it's still here after a while, the fetch or LLM call may have failed.</p>
-        <form method="post" action="/board/{{ item.id }}/send-to-content-review">
-          <label>Format</label>
-          <select name="format">
-            <option value="text_only">Text only</option>
-            <option value="poster">Poster</option>
-            <option value="reel">Reel (video)</option>
-            <option value="carousel">Carousel</option>
-          </select>
-          <label>Language</label>
-          <select name="language">
-            {% for code, name in language_choices.items() %}
-              <option value="{{ code }}" {% if code == default_language %}selected{% endif %}>{{ name }}</option>
-            {% endfor %}
-          </select>
-          <div class="actions">
-            <button type="submit" class="btn btn-primary">Send to Content Review</button>
-          </div>
-        </form>
-        <form method="post" action="/board/{{ item.id }}/discard" class="actions">
-          <button type="submit" class="btn btn-danger">Discard</button>
-        </form>
-
-      {% elif key == "analyzed" %}
-        <div class="modal-body">{{ item.brief }}</div>
-        <form method="post" action="/board/{{ item.id }}/decide">
-          <label>Format (only used if sent to Content Writer)</label>
-          <select name="format">
-            <option value="text_only">Text only</option>
-            <option value="poster">Poster</option>
-            <option value="reel">Reel (video)</option>
-            <option value="carousel">Carousel</option>
-          </select>
-          <label>Language (only used if sent to Content Writer)</label>
-          <select name="language">
-            {% for code, name in language_choices.items() %}
-              <option value="{{ code }}" {% if code == default_language %}selected{% endif %}>{{ name }}</option>
-            {% endfor %}
-          </select>
-          <label>Feedback (optional, used if sent to Content Writer or discarded)</label>
-          <textarea name="feedback" rows="2"></textarea>
-          <div class="actions">
-            <button type="submit" name="decision" value="write_myself" class="btn">Write myself</button>
-            <button type="submit" name="decision" value="send_to_content_writer" class="btn btn-primary">Send to Content Writer</button>
-            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
-            {% if active_brand.combined_drafting %}
-              <button type="submit" formaction="/board/{{ item.id }}/send-to-content-review" class="btn" title="Uses the Format/Language selected above">Fast-forward via combined drafting</button>
-            {% endif %}
-          </div>
-        </form>
-
-      {% elif key == "drafted" %}
-        {% set text_review = item.language in ("hi", "mr") %}
-        {% set copy_text_editable_here = text_review and item.format == "poster" and item.poster_template %}
-        {% if item.format == "reel" %}
-          <a href="/board/{{ item.id }}/review" class="btn btn-sm" style="margin-bottom:.6rem" title="Open the script, shot list, and narration editor as a full page instead of this dialog">&#8599; Open as full page</a>
-        {% endif %}
-        {% if not copy_text_editable_here %}
-          <div class="modal-body">{{ item.copy_text }}</div>
-        {% endif %}
-        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-        {% if item.copy_text %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post to your configured WhatsApp recipient now - as a text-only message, no media exists yet?')">
-            <button type="submit" class="btn">Send via WhatsApp (text only, no media yet)</button>
-          </form>
-        {% endif %}
-
-        {% if item.format in ("poster", "reel") %}
-          <textarea id="copy-payload-{{ item.id }}" hidden>{{ copy_payload_text(item) }}</textarea>
-          <div class="actions" style="margin-bottom:.5rem">
-            <button type="button" class="btn" onclick="copyCardContent('{{ item.id }}', this)">📋 Copy full content{{ " (for pasting into Google Flow etc.)" if item.format == "reel" }}</button>
-          </div>
-        {% endif %}
-
-        {% if item.format == "poster" %}
-          {% if text_review and item.poster_template %}
-            {% set pc = item.poster_content or {} %}
-            <form method="post" action="/board/{{ item.id }}/edit-poster-content" class="text-review-form">
-              <p class="faint">Marathi/Hindi text is AI-drafted and can need fixing - edit it directly here before Approve.</p>
-              <label>Caption (the social post text - kept separate from the poster image itself, edit both here together so they stay consistent)</label>
-              <textarea name="copy_text" rows="4">{{ item.copy_text or '' }}</textarea>
-              <label>Poster headline</label>
-              <textarea name="poster_headline" rows="1">{{ item.poster_headline or '' }}</textarea>
-              {% if item.poster_template == "quote" %}
-                <label>Quote</label>
-                <textarea name="quote_text" rows="2">{{ pc.quote_text or '' }}</textarea>
-                <label>Attribution</label>
-                <input type="text" name="attribution" value="{{ pc.attribution or '' }}">
-                <label>Citation</label>
-                <input type="text" name="citation" value="{{ pc.citation or '' }}">
-              {% elif item.poster_template == "tribute" %}
-                <label>Name</label>
-                <input type="text" name="name" value="{{ pc.name or '' }}">
-                <label>Achievement</label>
-                <input type="text" name="achievement" value="{{ pc.achievement or '' }}">
-                <label>Quote (optional)</label>
-                <textarea name="quote_text" rows="2">{{ pc.quote_text or '' }}</textarea>
-                <label>Tribute line</label>
-                <textarea name="tribute_line" rows="2">{{ pc.tribute_line or '' }}</textarea>
-              {% elif item.poster_template == "narrative" %}
-                <label>Body text</label>
-                <textarea name="body_text" rows="4">{{ pc.body_text or '' }}</textarea>
-              {% elif item.poster_template == "fact_critique" %}
-                <label>Facts (up to 3)</label>
-                {% for i in range(3) %}
-                  {% set fact = pc.facts[i] if pc.facts and i < (pc.facts | length) else {} %}
-                  <div class="text-review-row">
-                    <input type="text" name="facts_stat_{{ i }}" value="{{ fact.stat or '' }}" placeholder="Stat {{ i + 1 }}">
-                    <input type="text" name="facts_source_{{ i }}" value="{{ fact.source or '' }}" placeholder="Source">
-                  </div>
-                {% endfor %}
-                <label>Critique line</label>
-                <textarea name="critique_line" rows="2">{{ pc.critique_line or '' }}</textarea>
-              {% elif item.poster_template == "trivia" %}
-                <label>Headline</label>
-                <input type="text" name="headline" value="{{ pc.headline or '' }}">
-                <label>Body text</label>
-                <textarea name="body_text" rows="2">{{ pc.body_text or '' }}</textarea>
-                <label>Highlight phrases (up to 2)</label>
-                {% for i in range(2) %}
-                  {% set phrase = pc.highlight_phrases[i] if pc.highlight_phrases and i < (pc.highlight_phrases | length) else '' %}
-                  <input type="text" name="highlight_phrases_{{ i }}" value="{{ phrase }}" placeholder="Phrase {{ i + 1 }}">
-                {% endfor %}
-              {% elif item.poster_template == "event" %}
-                <label>Event title</label>
-                <input type="text" name="event_title" value="{{ pc.event_title or '' }}">
-                <label>Date/time</label>
-                <input type="text" name="datetime" value="{{ pc.datetime or '' }}">
-                <label>Location</label>
-                <input type="text" name="location" value="{{ pc.location or '' }}">
-                <label>CTA</label>
-                <input type="text" name="cta" value="{{ pc.cta or '' }}">
-              {% endif %}
-              <button type="submit" class="btn" style="margin-top:.4rem">Save text</button>
-            </form>
-          {% elif item.poster_headline %}
-            <p class="muted">Poster headline: "{{ item.poster_headline }}"</p>
-          {% endif %}
-          {% if item.poster_template %}
-            <form method="post" action="/board/{{ item.id }}/poster-template">
-              <label>Poster layout</label>
-              <select name="poster_template" onchange="this.form.requestSubmit()">
-                {% for value, label in template_choices.items() %}
-                  <option value="{{ value }}" {% if value == item.poster_template %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
-            </form>
-          {% endif %}
-        {% endif %}
-
-        {% if item.format == "reel" %}
-          {% if item.reel_script %}
-            <form method="post" action="/board/{{ item.id }}/edit-reel-script" class="text-review-form">
-              <p class="faint">Editing the script clears the shot list below - Regenerate builds a fresh one from the edited script.</p>
-              <label>Reel script</label>
-              <textarea name="reel_script" rows="4">{{ item.reel_script }}</textarea>
-              <label>Character/subject description (repeated in every scene for visual consistency)</label>
-              <textarea name="character_description" rows="2">{{ item.character_description or '' }}</textarea>
-              <button type="submit" class="btn" style="margin-top:.4rem">Save script</button>
-            </form>
-          {% endif %}
-          {% if item.reel_scenes %}
-            <div class="shotlist-table-wrap">
-              <table class="shotlist-table">
-                <thead>
-                  <tr><th>#</th><th>Timeframe</th><th>Visual</th><th>Text on visual</th><th>Music</th><th>Voiceover</th></tr>
-                </thead>
-                <tbody>
-                  {% for scene in item.reel_scenes %}
-                    <tr>
-                      <td>{{ loop.index }}{% if scene.location == "host" %} (host){% endif %}</td>
-                      <td class="shotlist-timeframe">{{ scene.timeframe or '' }}</td>
-                      <td>{{ scene.description or '' }}</td>
-                      <td>{{ scene.text_on_visual or "None" }}</td>
-                      <td>{{ scene.music or "None" }}</td>
-                      <td>{{ scene.narration or '' }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          {% endif %}
-          {% if text_review and item.reel_scenes %}
-            <form method="post" action="/board/{{ item.id }}/edit-reel-scenes" class="text-review-form">
-              <p class="faint">Marathi/Hindi narration is AI-drafted and can need fixing - edit the exact spoken text and music direction per scene before Approve.</p>
-              {% for scene in item.reel_scenes %}
-                <label>Scene {{ loop.index }}{% if scene.location == "host" %} (host){% endif %} narration</label>
-                <textarea name="narration_{{ loop.index0 }}" rows="2">{{ scene.narration or '' }}</textarea>
-                <label>Scene {{ loop.index }} music</label>
-                <input type="text" name="music_{{ loop.index0 }}" value="{{ scene.music or '' }}">
-              {% endfor %}
-              <button type="submit" class="btn" style="margin-top:.4rem">Save narration &amp; music</button>
-            </form>
-          {% endif %}
-          {% if item.reel_template %}
-            <form method="post" action="/board/{{ item.id }}/reel-template">
-              <label>Reel style</label>
-              <select name="reel_template" onchange="this.form.requestSubmit()">
-                {% for value, label in reel_template_choices.items() %}
-                  <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
-            </form>
-          {% endif %}
-        {% endif %}
-
-        {% if item.format == "carousel" %}
-          {% if item.carousel_script %}<p class="muted">Carousel script: {{ item.carousel_script }}</p>{% endif %}
-          {% if item.carousel_slides %}
-            <form method="post" action="/board/{{ item.id }}/edit-carousel-slides" class="text-review-form">
-              <p class="faint">Slide text is AI-drafted and can need fixing - edit the exact rendered text per slide before Approve.</p>
-              {% for slide in item.carousel_slides %}
-                <label>Slide {{ loop.index }} headline</label>
-                <input type="text" name="headline_{{ loop.index0 }}" value="{{ slide.headline or '' }}">
-                <label>Slide {{ loop.index }} body text</label>
-                <textarea name="body_text_{{ loop.index0 }}" rows="2">{{ slide.body_text or '' }}</textarea>
-              {% endfor %}
-              <button type="submit" class="btn" style="margin-top:.4rem">Save slide text</button>
-            </form>
-          {% endif %}
-        {% endif %}
-        <form method="post" action="/board/{{ item.id }}/decide">
-          <label>Feedback (used if you ask for a regenerate)</label>
-          <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
-          <div class="actions">
-            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve{% if item.format == "poster" %} &amp; generate poster{% elif item.format == "reel" %} &amp; generate reel{% elif item.format == "carousel" %} &amp; generate carousel{% endif %}</button>
-            <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
-            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
-          </div>
-        </form>
-        <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
-          <button type="submit" class="btn">Back to Needs Review</button>
-        </form>
-        {% if item.format == "text_only" %}
-          <p class="faint">Want a graphic or video for this post instead of (or alongside) plain text? This approves it first, then generates the new format - the caption above stays exactly as written.</p>
-          <div class="actions">
-            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
-              <input type="hidden" name="target_format" value="poster">
-              <button type="submit" class="btn">Approve &amp; generate poster</button>
-            </form>
-            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
-              <input type="hidden" name="target_format" value="reel">
-              <button type="submit" class="btn">Approve &amp; generate reel</button>
-            </form>
-            <form method="post" action="/board/{{ item.id }}/approve-and-generate-media">
-              <input type="hidden" name="target_format" value="carousel">
-              <button type="submit" class="btn">Approve &amp; generate carousel</button>
-            </form>
-          </div>
-        {% endif %}
-
-      {% elif key == "media_generated" %}
-        {{ media_preview(media) }}
-        <div class="modal-body">{{ item.copy_text }}</div>
-        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-        {% if item.copy_text %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post (with the media shown above) to your configured WhatsApp recipient now, before Approve?')">
-            <button type="submit" class="btn">Send via WhatsApp</button>
-          </form>
-        {% endif %}
-        {% if item.format == "reel" and item.reel_template %}
-          <form method="post" action="/board/{{ item.id }}/reel-template">
-            <label>Reel style (changing this clears the shot list, so Regenerate builds a fresh one)</label>
-            <select name="reel_template" onchange="this.form.requestSubmit()">
-              {% for value, label in reel_template_choices.items() %}
-                <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </form>
-        {% endif %}
-        <form method="post" action="/board/{{ item.id }}/decide">
-          <label>Feedback (used if you ask for a regenerate)</label>
-          <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
-          <div class="actions">
-            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve</button>
-            <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
-            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
-          </div>
-        </form>
-        {% if item.copy_text %}
-          <p class="faint">Not happy with this {{ item.format }}? Generate the other format instead - same approved caption, new headline/script generated for it.</p>
-          <div class="actions">
-            {% if item.format != "poster" %}
-              <form method="post" action="/board/{{ item.id }}/generate-media">
-                <input type="hidden" name="target_format" value="poster">
-                <button type="submit" class="btn">Generate poster instead</button>
-              </form>
-            {% endif %}
-            {% if item.format != "reel" %}
-              <form method="post" action="/board/{{ item.id }}/generate-media">
-                <input type="hidden" name="target_format" value="reel">
-                <button type="submit" class="btn">Generate reel instead</button>
-              </form>
-            {% endif %}
-            {% if item.format != "carousel" %}
-              <form method="post" action="/board/{{ item.id }}/generate-media">
-                <input type="hidden" name="target_format" value="carousel">
-                <button type="submit" class="btn">Generate carousel instead</button>
-              </form>
-            {% endif %}
-          </div>
-          <form method="post" action="/board/{{ item.id }}/rewind-to-content-review" class="actions" style="margin-top:.5rem">
-            <button type="submit" class="btn">Back to Content Review</button>
-          </form>
-        {% endif %}
-        <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
-          <button type="submit" class="btn">Back to Needs Review</button>
-        </form>
-
-      {% elif key == "approved" %}
-        {{ media_preview(media) }}
-        {% if item.last_error %}<div class="error-box">{{ item.last_error }}</div>{% endif %}
-        {% if not item.copy_text %}<div class="modal-body">{{ item.brief }}</div>{% endif %}
-        <form method="post" action="/board/{{ item.id }}/write-copy">
-          <label>Copy text</label>
-          <textarea name="copy_text" rows="4" placeholder="Paste/edit your post copy here" required>{{ item.copy_text or '' }}</textarea>
-          <button type="submit" class="btn btn-primary" style="margin-top:.5rem">{{ "Update copy" if item.copy_text else "Save copy" }}</button>
-        </form>
-        {% if item.copy_text %}
-          {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.75rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post to your configured WhatsApp recipient now?')">
-            <button type="submit" class="btn btn-primary">Send via WhatsApp</button>
-          </form>
-          <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin-bottom:.75rem; align-items:center" onsubmit="return submitPostiz(this)">
-            <input type="datetime-local" name="schedule_at" style="width:auto">
-            <button type="submit" class="btn">Send to Postiz</button>
-          </form>
-          <p class="faint">Add a graphic or video for this same post - the caption above stays exactly as approved, only the new format's headline/script gets generated.</p>
-          <div class="actions">
-            <form method="post" action="/board/{{ item.id }}/generate-media">
-              <input type="hidden" name="target_format" value="poster">
-              <button type="submit" class="btn">Generate poster</button>
-            </form>
-            <form method="post" action="/board/{{ item.id }}/generate-media">
-              <input type="hidden" name="target_format" value="reel">
-              <button type="submit" class="btn">Generate reel</button>
-            </form>
-            <form method="post" action="/board/{{ item.id }}/generate-media">
-              <input type="hidden" name="target_format" value="carousel">
-              <button type="submit" class="btn">Generate carousel</button>
-            </form>
-          </div>
-          <form method="post" action="/board/{{ item.id }}/rewind-to-content-review" class="actions" style="margin-top:.5rem">
-            <button type="submit" class="btn">Back to Content Review</button>
-          </form>
-        {% endif %}
-        {% if item.brief %}
-          <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review" class="actions">
-            <button type="submit" class="btn">Back to Needs Review</button>
-          </form>
-        {% endif %}
-        <form method="post" action="/board/{{ item.id }}/discard" class="actions">
-          <button type="submit" class="btn btn-danger">Discard</button>
-        </form>
-
-      {% elif key == "scheduled" %}
-        {{ media_preview(media) }}
-        {% if item.last_error %}<div class="error-box">{{ item.last_error }}</div>{% endif %}
-        {% if item.copy_text %}<div class="modal-body">{{ item.copy_text }}</div>{% endif %}
-        {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-        <p class="muted" style="margin-bottom:.4rem">Scheduled to Postiz:</p>
-        {% for post in posts %}
-          <div class="scheduled-row">
-            <span>{{ post.channel_name or post.channel_identifier }} <span class="faint">({{ post.channel_identifier }})</span> &middot; <time class="local-time" datetime="{{ post.scheduled_at.isoformat() }}">{{ post.scheduled_at.strftime('%a %d %b %Y, %H:%M') }} UTC</time></span>
-            <form method="post" action="/board/{{ item.id }}/postiz-posts/{{ post.postiz_post_id }}/cancel" onsubmit="return confirm('Cancel this scheduled post?')">
-              <button type="submit" class="btn btn-sm btn-ghost">Cancel</button>
-            </form>
-          </div>
-        {% endfor %}
-        <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin:.75rem 0; align-items:center" onsubmit="return submitPostiz(this)">
-          <input type="datetime-local" name="schedule_at" style="width:auto" required title="This item is already scheduled - pick when this additional send should go out">
-          <button type="submit" class="btn">Send to Postiz</button>
-        </form>
-        <p class="faint" style="margin-top:-.5rem">Adds another send (e.g. a different channel or time) - it doesn't change the schedule shown above.</p>
-
-      {% elif key == "discarded" %}
-        <p class="muted">Rationale: {{ item.priority_rationale }}</p>
-        {% if item.article_summary %}<div class="modal-body">{{ item.article_summary }}</div>{% endif %}
-        <form method="post" action="/board/{{ item.id }}/restore" class="actions" style="margin-top:.5rem">
-          <button type="submit" class="btn btn-primary">Restore to Needs Review</button>
-        </form>
-      {% endif %}
-    </dialog>
-  {% endmacro %}
 
   <div class="board-tabs" role="tablist">
     {% for key, label, stage in columns %}
@@ -1014,7 +495,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
           <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('auto-schedule-modal').showModal()">Auto-schedule&hellip;</button>
         {% endif %}
         {% for item in items_by_stage[key] %}
-          {{ card(item, key, emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
+          {{ cm.card_face(item, key, emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
         {% else %}
           <div class="empty-col">Nothing here.</div>
         {% endfor %}
@@ -1027,7 +508,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
         <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('reschedule-all-modal').showModal()">Reschedule all&hellip;</button>
       {% endif %}
       {% for item in scheduled_items %}
-        {{ card(item, "scheduled", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id), scheduled_posts_by_item_id.get(item.id)) }}
+        {{ cm.card_face(item, "scheduled", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id), scheduled_posts_by_item_id.get(item.id)) }}
       {% else %}
         <div class="empty-col">Nothing scheduled.</div>
       {% endfor %}
@@ -1036,7 +517,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
     <div class="column discarded-col collapsible" data-col="discarded">
       <h3 class="column-toggle" onclick="window.toggleBoardColumn(this)">Discarded <span class="count">{{ discarded | length }}</span></h3>
       {% for item in discarded %}
-        {{ card(item, "discarded", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
+        {{ cm.card_face(item, "discarded", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
       {% else %}
         <div class="empty-col">Nothing discarded.</div>
       {% endfor %}
@@ -1050,6 +531,13 @@ Hashtags: {{ item.hashtags | join(' ') }}
       <button type="button" class="btn btn-primary" id="board-confirm-ok">Confirm</button>
     </div>
   </dialog>
+
+  {# Single shared dialog for every card's detail, populated on demand by
+     openCard() below via GET /board/{id}/card-detail - replaces the old
+     one-<dialog>-per-card approach, which pre-rendered every card's full
+     script/shot-list/form content into the initial page load whether or
+     not it was ever opened. #}
+  <dialog class="kmodal" id="card-detail-modal"></dialog>
 
   <script>
     // On-brand confirm, replacing the browser's confirm() for WhatsApp
@@ -1087,6 +575,35 @@ Hashtags: {{ item.hashtags | join(' ') }}
         dialog.addEventListener('click', function (e) { if (e.target === dialog) { pendingForm = null; dialog.close(); } });
       }
     })();
+
+    // Opens a card's detail on demand - the single #card-detail-modal is
+    // reused for every click, populated by fetching the fragment this
+    // card's own stage renders server-side (GET /board/{id}/card-detail).
+    // Nothing about a card's script/shot-list/forms is sent to the browser
+    // until this actually runs, unlike the old one-<dialog>-per-card
+    // approach. Click-outside-to-close (registered once below, since
+    // #card-detail-modal itself never gets replaced, only its innerHTML)
+    // and every onclick/onsubmit string in the fetched HTML (copyCardContent,
+    // boardConfirmSubmit, submitPostiz, ...) work exactly as before - a
+    // browser wires up inline handlers the same way whether the markup
+    // came from the initial page load or a later innerHTML assignment.
+    window.openCard = function (itemId) {
+      var dialog = document.getElementById('card-detail-modal');
+      if (!dialog) return;
+      dialog.innerHTML = '<button class="modal-close" onclick="document.getElementById(\'card-detail-modal\').close()" aria-label="Close">&times;</button>'
+        + '<div class="processing-state"><span class="spinner" aria-hidden="true"></span><p class="muted" style="margin:0">Loading&hellip;</p></div>';
+      dialog.showModal();
+      fetch('/board/' + itemId + '/card-detail', { credentials: 'same-origin' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('failed to load');
+          return res.text();
+        })
+        .then(function (html) { dialog.innerHTML = html; })
+        .catch(function () {
+          dialog.innerHTML = '<button class="modal-close" onclick="document.getElementById(\'card-detail-modal\').close()" aria-label="Close">&times;</button>'
+            + '<p class="muted">Could not load this card - close and try again.</p>';
+        });
+    };
 
     // Reads the hidden textarea a Content Review card renders (server-side,
     // via the copy_payload_text macro) and puts it on the clipboard -

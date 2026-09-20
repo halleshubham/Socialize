@@ -325,6 +325,111 @@ def show_content_review_page(
     )
 
 
+def _display_key_for_item(db: Session, content_item: ContentItem) -> str:
+    """Maps a content item's actual current stage to the column key
+    board.html's card macros branch on - the same mapping show_board()
+    applies when it buckets items into columns, just for one item instead
+    of the whole board. "scheduled" isn't a real Stage value (see
+    show_board's own comment on scheduled_items) - an approved item counts
+    as scheduled here under the same rule: it has at least one PostizPost
+    with a non-null scheduled_at."""
+    stage_to_key = {
+        Stage.RESEARCHED: "researched",
+        Stage.ANALYZED: "analyzed",
+        Stage.DRAFTED: "drafted",
+        Stage.MEDIA_GENERATED: "media_generated",
+        Stage.DISCARDED: "discarded",
+    }
+    if content_item.stage in stage_to_key:
+        return stage_to_key[content_item.stage]
+    has_scheduled_post = (
+        db.query(PostizPost)
+        .filter(PostizPost.content_item_id == content_item.id, PostizPost.scheduled_at.isnot(None))
+        .first()
+        is not None
+    )
+    return "scheduled" if has_scheduled_post else "approved"
+
+
+def _media_for_item(storage, db: Session, content_item: ContentItem):
+    """Single-item equivalent of show_board's media_by_item_id bulk query -
+    same "newest asset matching the item's current format" rule for
+    poster/reel, same per-slide-index grouping for carousel."""
+    if content_item.format == "carousel":
+        slide_assets = (
+            db.query(MediaAsset)
+            .filter(MediaAsset.content_item_id == content_item.id, MediaAsset.asset_type == "carousel_slide")
+            .order_by(MediaAsset.created_at.desc())
+            .all()
+        )
+        idx_map: dict = {}
+        for asset in slide_assets:
+            idx_map.setdefault(asset.slide_index, asset)
+        if not idx_map:
+            return None
+        urls = [storage.url_for(idx_map[i].storage_uri) for i in sorted(idx_map.keys())]
+        return (urls, "carousel")
+
+    asset = (
+        db.query(MediaAsset)
+        .filter(MediaAsset.content_item_id == content_item.id, MediaAsset.asset_type == content_item.format)
+        .order_by(MediaAsset.created_at.desc())
+        .first()
+    )
+    return (storage.url_for(asset.storage_uri), asset.asset_type) if asset else None
+
+
+@router.get("/{content_item_id}/card-detail", response_class=HTMLResponse)
+def show_card_detail(
+    content_item_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The lazy-loaded counterpart to card_face in board_card_macros.html -
+    fetched by openCard() in board.html only once a card is actually
+    clicked, rather than every card's full detail (script editors,
+    shot-list tables, forms) being pre-rendered into the initial /board
+    page load for every item in every column. Returns just the dialog's
+    inner HTML fragment, not a full page."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item:
+        return HTMLResponse('<p class="muted">Not found, or you don\'t have access to it.</p>', status_code=404)
+
+    key = _display_key_for_item(db, content_item)
+    email = db.get(IngestedEmail, content_item.source_email_id) if content_item.source_email_id else None
+    brand = db.get(BrandKit, content_item.brand_kit_id)
+    storage = get_storage_backend()
+    media = _media_for_item(storage, db, content_item)
+    cost = _cost_by_item_id(db, [content_item.id]).get(content_item.id)
+    posts = None
+    if key == "scheduled":
+        posts = (
+            db.query(PostizPost)
+            .filter(PostizPost.content_item_id == content_item.id, PostizPost.scheduled_at.isnot(None))
+            .order_by(PostizPost.scheduled_at.asc())
+            .all()
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "board_card_fragment.html",
+        {
+            "item": content_item,
+            "key": key,
+            "email": email,
+            "media": media,
+            "cost": cost,
+            "posts": posts,
+            "template_choices": TEMPLATE_CHOICES,
+            "reel_template_choices": REEL_TEMPLATE_CHOICES,
+            "language_choices": LANGUAGE_CHOICES,
+            "default_language": brand.default_language or DEFAULT_LANGUAGE,
+            "combined_drafting": brand.combined_drafting,
+        },
+    )
+
+
 def _fetch_and_redirect(brand_kit_id) -> RedirectResponse:
     """Shared by fetch_now and refetch_since below - checking/listing Gmail
     is a single fast API call and worth blocking on (GmailNotConnected is
