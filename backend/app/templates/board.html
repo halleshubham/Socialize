@@ -38,6 +38,19 @@
     .board { display: flex; gap: .9rem; overflow-x: auto; align-items: flex-start; padding-bottom: .5rem; }
     .column { flex: 0 0 270px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; height: calc(100vh - 16rem); overflow-y: auto; }
 
+    /* Scheduled/Discarded start collapsed on desktop - low-activity columns
+       that otherwise eat 2 of a 7-column first-run board before a new user
+       has anything in them. A rail-width strip with a vertical label,
+       click to expand; state remembered per-viewer via localStorage. */
+    .column-toggle { cursor: pointer; }
+    .column.collapsible.collapsed { flex-basis: 44px; width: 44px; padding: .6rem .3rem; cursor: pointer; }
+    .column.collapsible.collapsed > *:not(.column-toggle) { display: none; }
+    .column.collapsible.collapsed .column-toggle {
+      writing-mode: vertical-rl; text-orientation: mixed; position: static; background: none;
+      padding: 0; margin: 0 auto; height: 100%; display: flex; align-items: flex-start;
+      justify-content: flex-start; gap: .5rem;
+    }
+
     .board-tabs { display: none; }
 
     @media (max-width: 640px) {
@@ -54,6 +67,11 @@
       .board { display: block; overflow-x: visible; }
       .column { display: none; flex-basis: auto; height: calc(100vh - 22rem); }
       .column.mobile-active { display: block; }
+      /* Mobile already isolates one column at a time via the tab strip -
+         the desktop-only collapsed rail would just waste that space. */
+      .column.collapsible.collapsed { width: auto; padding: .7rem; }
+      .column.collapsible.collapsed > *:not(.column-toggle) { display: revert; }
+      .column.collapsible.collapsed .column-toggle { writing-mode: initial; height: auto; }
     }
     .column h3 { margin: 0 0 .6rem; font-size: .82rem; font-weight: 650; display: flex; align-items: center; gap: .4rem; justify-content: space-between; position: sticky; top: 0; background: var(--bg-subtle); padding-bottom: .3rem; }
     .column h3 .count { color: var(--text-faint); font-weight: 600; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 999px; padding: 0 .45rem; font-size: .72rem; }
@@ -99,6 +117,16 @@
     dialog.kmodal form { margin: 0; }
     dialog.kmodal .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .7rem; }
     dialog.kmodal img.media-preview, dialog.kmodal video.media-preview { max-width: 100%; border-radius: var(--radius-sm); margin-bottom: .6rem; display: block; }
+
+    /* On-brand confirm dialog, in place of the browser's own confirm() for
+       the highest-stakes actions (WhatsApp sends, Postiz auto-schedule) -
+       those two involve real external delivery, not just local app state,
+       so they get a styled step-back instead of a native browser prompt
+       that's easy to blast through by habit. */
+    dialog#board-confirm-dialog { width: min(440px, 92vw); border: none; border-radius: var(--radius-lg); padding: 1.3rem 1.4rem; background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow); }
+    dialog#board-confirm-dialog::backdrop { background: rgba(10, 10, 14, .5); backdrop-filter: blur(2px); }
+    dialog#board-confirm-dialog p { margin: 0 0 1rem; font-size: .92rem; white-space: pre-wrap; }
+    dialog#board-confirm-dialog .confirm-actions { display: flex; justify-content: flex-end; gap: .6rem; }
     dialog.kmodal video.media-preview { max-height: 70vh; }
     dialog.kmodal .carousel-preview { display: flex; gap: .5rem; overflow-x: auto; margin-bottom: .6rem; }
     dialog.kmodal .carousel-preview img.media-preview { max-width: 65%; flex: 0 0 auto; margin-bottom: 0; }
@@ -614,12 +642,15 @@ Hashtags: {{ item.hashtags | join(' ') }}
       {% elif key == "drafted" %}
         {% set text_review = item.language in ("hi", "mr") %}
         {% set copy_text_editable_here = text_review and item.format == "poster" and item.poster_template %}
+        {% if item.format == "reel" %}
+          <a href="/board/{{ item.id }}/review" class="btn btn-sm" style="margin-bottom:.6rem" title="Open the script, shot list, and narration editor as a full page instead of this dialog">&#8599; Open as full page</a>
+        {% endif %}
         {% if not copy_text_editable_here %}
           <div class="modal-body">{{ item.copy_text }}</div>
         {% endif %}
         {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
         {% if item.copy_text %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now - as a text-only message, no media exists yet?')">
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post to your configured WhatsApp recipient now - as a text-only message, no media exists yet?')">
             <button type="submit" class="btn">Send via WhatsApp (text only, no media yet)</button>
           </form>
         {% endif %}
@@ -813,7 +844,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
         <div class="modal-body">{{ item.copy_text }}</div>
         {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
         {% if item.copy_text %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return confirm('Send this post (with the media shown above) to your configured WhatsApp recipient now, before Approve?')">
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.5rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post (with the media shown above) to your configured WhatsApp recipient now, before Approve?')">
             <button type="submit" class="btn">Send via WhatsApp</button>
           </form>
         {% endif %}
@@ -877,7 +908,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
         </form>
         {% if item.copy_text %}
           {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
-          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.75rem 0" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now?')">
+          <form method="post" action="/board/{{ item.id }}/send-whatsapp" class="actions" style="margin:.75rem 0" onsubmit="return window.boardConfirmSubmit(this, 'Send this post to your configured WhatsApp recipient now?')">
             <button type="submit" class="btn btn-primary">Send via WhatsApp</button>
           </form>
           <form method="post" action="/board/{{ item.id }}/send-postiz" class="actions" style="margin-bottom:.75rem; align-items:center" onsubmit="return submitPostiz(this)">
@@ -990,8 +1021,8 @@ Hashtags: {{ item.hashtags | join(' ') }}
       </div>
     {% endfor %}
 
-    <div class="column" data-col="scheduled">
-      <h3>Scheduled <span class="count">{{ scheduled_items | length }}</span></h3>
+    <div class="column collapsible" data-col="scheduled">
+      <h3 class="column-toggle" onclick="window.toggleBoardColumn(this)">Scheduled <span class="count">{{ scheduled_items | length }}</span></h3>
       {% if scheduled_items %}
         <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('reschedule-all-modal').showModal()">Reschedule all&hellip;</button>
       {% endif %}
@@ -1002,8 +1033,8 @@ Hashtags: {{ item.hashtags | join(' ') }}
       {% endfor %}
     </div>
 
-    <div class="column discarded-col" data-col="discarded">
-      <h3>Discarded <span class="count">{{ discarded | length }}</span></h3>
+    <div class="column discarded-col collapsible" data-col="discarded">
+      <h3 class="column-toggle" onclick="window.toggleBoardColumn(this)">Discarded <span class="count">{{ discarded | length }}</span></h3>
       {% for item in discarded %}
         {{ card(item, "discarded", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
       {% else %}
@@ -1012,7 +1043,51 @@ Hashtags: {{ item.hashtags | join(' ') }}
     </div>
   </div>
 
+  <dialog id="board-confirm-dialog">
+    <p id="board-confirm-message"></p>
+    <div class="confirm-actions">
+      <button type="button" class="btn btn-ghost" id="board-confirm-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="board-confirm-ok">Confirm</button>
+    </div>
+  </dialog>
+
   <script>
+    // On-brand confirm, replacing the browser's confirm() for WhatsApp
+    // sends and Postiz auto-schedule specifically - both fire a real
+    // external delivery, not just a local state change. form.submit()
+    // (not requestSubmit) deliberately skips the form's own onsubmit
+    // handler on the way back through, so confirming here can't re-open
+    // this same dialog in a loop. Falls back to window.confirm if <dialog>
+    // isn't supported, so a form's onsubmit contract (return true/false)
+    // still holds either way.
+    (function () {
+      var dialog = document.getElementById('board-confirm-dialog');
+      var msgEl = document.getElementById('board-confirm-message');
+      var okBtn = document.getElementById('board-confirm-ok');
+      var cancelBtn = document.getElementById('board-confirm-cancel');
+      var pendingForm = null;
+
+      window.boardConfirmSubmit = function (form, message) {
+        if (!dialog || typeof dialog.showModal !== 'function') return confirm(message);
+        pendingForm = form;
+        msgEl.textContent = message;
+        dialog.showModal();
+        return false;
+      };
+
+      if (dialog) {
+        okBtn.addEventListener('click', function () {
+          dialog.close();
+          var f = pendingForm;
+          pendingForm = null;
+          if (f) f.submit();
+        });
+        cancelBtn.addEventListener('click', function () { pendingForm = null; dialog.close(); });
+        dialog.addEventListener('cancel', function () { pendingForm = null; });
+        dialog.addEventListener('click', function (e) { if (e.target === dialog) { pendingForm = null; dialog.close(); } });
+      }
+    })();
+
     // Reads the hidden textarea a Content Review card renders (server-side,
     // via the copy_payload_text macro) and puts it on the clipboard -
     // clicking the button never touches the server, so it can't accidentally
@@ -1088,6 +1163,33 @@ Hashtags: {{ item.hashtags | join(' ') }}
       }
     })();
 
+    // Scheduled/Discarded columns collapse to a narrow rail by default on
+    // desktop (mobile already isolates one column at a time via the tab
+    // strip above, so nothing to collapse there). Per-viewer expanded/
+    // collapsed choice remembered in localStorage; a column with actual
+    // items in it still starts collapsed too - it's about reducing the
+    // first-run column count, not hiding something that needs attention.
+    window.toggleBoardColumn = function (heading) {
+      var col = heading.closest('.column');
+      if (!col) return;
+      col.classList.toggle('collapsed');
+      try {
+        var key = 'socialize_board_collapsed_' + col.dataset.col;
+        localStorage.setItem(key, col.classList.contains('collapsed') ? '1' : '0');
+      } catch (e) {}
+    };
+
+    (function () {
+      document.querySelectorAll('.column.collapsible').forEach(function (col) {
+        var collapsed = true;
+        try {
+          var stored = localStorage.getItem('socialize_board_collapsed_' + col.dataset.col);
+          if (stored !== null) collapsed = stored === '1';
+        } catch (e) {}
+        col.classList.toggle('collapsed', collapsed);
+      });
+    })();
+
     // Converts the two time-of-day pickers to fractional hours and grabs
     // the browser's real UTC offset (same reasoning as submitPostiz above -
     // the server has no other way to know what timezone these times mean).
@@ -1117,7 +1219,7 @@ Hashtags: {{ item.hashtags | join(' ') }}
     function submitAutoSchedule(form) {
       var label = prepareScheduleForm(form);
       if (!label) return false;
-      return confirm('Auto-schedule your unscheduled Approved posts across ' + label + '? This starts posting to Postiz in the background.');
+      return window.boardConfirmSubmit(form, 'Auto-schedule your unscheduled Approved posts across ' + label + '? This starts posting to Postiz in the background.');
     }
 
     function submitRescheduleAll(form) {

@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Account - Socialize{% endblock %}
 {% block content %}
+  <style>
+    .guide-steps { margin: 0; padding-left: 1.2rem; font-size: .82rem; color: var(--text-muted); }
+    .guide-steps li { margin: .15rem 0; }
+  </style>
   <h1>Account</h1>
   <p class="muted">Your own LLM provider API keys. When a brand you own generates content, these fund it - a brand shared with you as a member still bills to <em>its owner's</em> keys, never yours. <strong>Bring your own key is required</strong> - a brand can't generate content for a provider until its owner sets a key here; there's no shared fallback for content generation.</p>
 
@@ -24,7 +28,7 @@
             </form>
           {% endif %}
         </div>
-        <p class="faint" style="margin:.4rem 0 0 0">{{ provider_guides[provider] | safe }}</p>
+        <div class="faint" style="margin:.4rem 0 0 0">{{ provider_guides[provider] | safe }}</div>
       </div>
     {% endfor %}
   </div>

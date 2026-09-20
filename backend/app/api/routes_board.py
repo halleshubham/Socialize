@@ -289,6 +289,42 @@ def show_board(
     )
 
 
+@router.get("/{content_item_id}/review", response_class=HTMLResponse)
+def show_content_review_page(
+    content_item_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Dedicated full-page alternative to the Content Review card's dialog,
+    for reel-format items specifically - that dialog crams a script editor,
+    an up-to-8-row shot-list table, and (for hi/mr) a per-scene narration
+    editor into a ~560px-wide modal, the single most content-dense review
+    surface in the app. The dialog still exists and still works exactly as
+    before (this is additive, not a replacement) - this route is a bigger
+    canvas for the same review, one click away via a link on the card."""
+    content_item = _accessible_content_item(db, user, content_item_id)
+    if not content_item or content_item.stage != Stage.DRAFTED or content_item.format != "reel":
+        return RedirectResponse(url="/board", status_code=303)
+
+    email = db.get(IngestedEmail, content_item.source_email_id) if content_item.source_email_id else None
+    brand = db.get(BrandKit, content_item.brand_kit_id)
+
+    return templates.TemplateResponse(
+        request,
+        "board_review.html",
+        {
+            "item": content_item,
+            "email": email,
+            "reel_template_choices": REEL_TEMPLATE_CHOICES,
+            "accessible_brands": get_accessible_brands(db, user),
+            "active_brand": brand,
+            "user": user,
+            "active_nav": "board",
+        },
+    )
+
+
 def _fetch_and_redirect(brand_kit_id) -> RedirectResponse:
     """Shared by fetch_now and refetch_since below - checking/listing Gmail
     is a single fast API call and worth blocking on (GmailNotConnected is
@@ -1253,10 +1289,22 @@ def update_poster_template(
     return RedirectResponse(url="/board", status_code=303)
 
 
+def _review_redirect(return_to: str | None, content_item_id: str) -> RedirectResponse:
+    """Sends the user back to wherever they were editing from - the board's
+    own Content Review dialog, or (for reel items) the dedicated full-page
+    review at /board/{id}/review. Only ever the one known-safe path for this
+    exact item, never an arbitrary posted URL, so this can't be used as an
+    open redirect."""
+    if return_to == "review":
+        return RedirectResponse(url=f"/board/{content_item_id}/review", status_code=303)
+    return RedirectResponse(url="/board", status_code=303)
+
+
 @router.post("/{content_item_id}/reel-template")
 def update_reel_template(
     content_item_id: str,
     reel_template: str = Form(...),
+    return_to: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1276,7 +1324,7 @@ def update_reel_template(
             content_item.reel_template = reel_template
             content_item.reel_scenes = None
             db.commit()
-    return RedirectResponse(url="/board", status_code=303)
+    return _review_redirect(return_to, content_item_id)
 
 
 @router.post("/{content_item_id}/edit-reel-script")
@@ -1284,6 +1332,7 @@ def edit_reel_script(
     content_item_id: str,
     reel_script: str = Form(...),
     character_description: str = Form(""),
+    return_to: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1308,7 +1357,7 @@ def edit_reel_script(
     content_item.character_description = character_description.strip() or None
     content_item.reel_scenes = None
     db.commit()
-    return RedirectResponse(url="/board", status_code=303)
+    return _review_redirect(return_to, content_item_id)
 
 
 # Hindi/Marathi-only pre-generation text editing (routes below) - AI-drafted
@@ -1429,7 +1478,7 @@ async def edit_reel_scenes(
             scene["music"] = str(form.get(music_key, "")).strip()
     content_item.reel_scenes = scenes
     db.commit()
-    return RedirectResponse(url="/board", status_code=303)
+    return _review_redirect(str(form.get("return_to", "")) or None, content_item_id)
 
 
 @router.post("/{content_item_id}/edit-carousel-slides")

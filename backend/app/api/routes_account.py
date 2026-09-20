@@ -26,18 +26,33 @@ PROVIDER_LABELS = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "googl
 # out-of-band context from an admin needs to know where to actually go.
 PROVIDER_GUIDES = {
     "anthropic": (
-        'Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" '
-        'rel="noopener">console.anthropic.com → API Keys</a>. Used for content drafting/analysis.'
+        '<ol class="guide-steps">'
+        '<li>Open <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">'
+        "console.anthropic.com → API Keys</a></li>"
+        "<li>Click <strong>Create Key</strong></li>"
+        "<li>Paste it below</li>"
+        "</ol>"
+        '<p class="faint" style="margin:.3rem 0 0">Used for content drafting/analysis.</p>'
     ),
     "openai": (
-        'Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" '
-        'rel="noopener">platform.openai.com → API keys</a>. Used for Hindi/Marathi content specifically.'
+        '<ol class="guide-steps">'
+        '<li>Open <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">'
+        "platform.openai.com → API keys</a></li>"
+        "<li>Click <strong>Create new secret key</strong></li>"
+        "<li>Paste it below</li>"
+        "</ol>"
+        '<p class="faint" style="margin:.3rem 0 0">Used for Hindi/Marathi content specifically.</p>'
     ),
     "google": (
-        'Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">'
-        "aistudio.google.com → Get API key</a>. Used for poster images and Veo reel video - "
-        "<strong>Veo specifically requires a billed Google Cloud project</strong>, not just a free "
-        "AI Studio key, or video generation will fail even with a key set here."
+        '<ol class="guide-steps">'
+        '<li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">'
+        "aistudio.google.com → Get API key</a></li>"
+        "<li>Click <strong>Create API key</strong></li>"
+        "<li>Paste it below</li>"
+        "</ol>"
+        '<p class="faint" style="margin:.3rem 0 0">Used for poster images and Veo reel video. '
+        "<strong>Veo specifically requires a billed Google Cloud project</strong> - a free AI Studio "
+        "key alone will save here but fail at video generation time.</p>"
     ),
 }
 

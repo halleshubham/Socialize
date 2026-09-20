@@ -21,12 +21,34 @@
     .bk-nav a { padding: .4rem .65rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .85rem; font-weight: 500; transition: background .12s, color .12s; }
     .bk-nav a:hover { background: var(--bg-subtle); color: var(--text); }
     .bk-nav a.active { background: var(--primary-tint); color: var(--primary); }
+    .bk-nav a.bk-nav-danger { color: var(--danger); }
+    .bk-nav a.bk-nav-danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .bk-nav a.bk-nav-danger.active { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+    .bk-nav-divider { height: 1px; background: var(--border); margin: .5rem .2rem; }
+
+    .bk-search { width: 100%; box-sizing: border-box; margin: 0 0 .7rem; padding: .4rem .6rem; font-size: .82rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-subtle); }
+    .bk-search-results { position: absolute; z-index: 20; left: 0; right: 0; margin-top: .2rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-md, 0 4px 14px rgba(0,0,0,.12)); max-height: 260px; overflow-y: auto; }
+    .bk-search-results:empty { display: none; }
+    .bk-search-results button { display: block; width: 100%; text-align: left; padding: .45rem .6rem; border: 0; background: none; font-size: .8rem; color: var(--text); cursor: pointer; border-bottom: 1px solid var(--border); }
+    .bk-search-results button:last-child { border-bottom: 0; }
+    .bk-search-results button:hover { background: var(--bg-subtle); }
+    .bk-search-results .bk-result-section { color: var(--text-muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; }
+    .bk-search-nav { position: relative; }
 
     .bk-group { margin-bottom: 2.75rem; scroll-margin-top: 1rem; }
     .bk-group:last-child { margin-bottom: 0; }
     .bk-group-heading { margin-bottom: 1.1rem; padding-bottom: .6rem; border-bottom: 2px solid var(--primary); }
     .bk-group-heading h2 { margin: 0; font-size: 1.2rem; color: var(--primary); }
     .bk-group-heading p { margin: .2rem 0 0; color: var(--text-muted); font-size: .82rem; }
+
+    .bk-subgroup-label { font-size: .95rem; font-weight: 700; color: var(--text); margin: 1.6rem 0 .7rem; }
+    .bk-subgroup-label:first-of-type { margin-top: 0; }
+    .bk-subgroup-hint { margin: -.5rem 0 .9rem; color: var(--text-muted); font-size: .82rem; }
+
+    .bk-highlight { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: var(--radius-sm); transition: outline-color 1.6s ease; }
+
+    .guide-steps { margin: .3rem 0 0; padding-left: 1.2rem; font-size: .8rem; color: var(--text-muted); }
+    .guide-steps li { margin: .15rem 0; }
 
     .prompt-slot { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .7rem .9rem; margin-bottom: .6rem; }
     .prompt-slot summary { cursor: pointer; font-weight: 600; font-size: .88rem; display: flex; align-items: center; gap: .5rem; }
@@ -38,6 +60,7 @@
       .bk-layout { display: block; }
       .bk-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: .4rem; border-bottom: 1px solid var(--border); padding-bottom: .8rem; margin-bottom: 1.5rem; }
       .bk-nav a { background: var(--bg-subtle); }
+      .bk-nav-divider { display: none; }
     }
   </style>
 
@@ -48,14 +71,17 @@
   {% if gmail_just_connected %}<div class="badge badge-success" style="margin-bottom:1rem">Gmail connected</div>{% endif %}
 
   <div class="bk-layout">
-    <nav class="bk-nav" id="bk-nav">
+    <nav class="bk-nav bk-search-nav" id="bk-nav">
+      <input type="search" class="bk-search" id="bk-search" placeholder="Search settings&hellip;" autocomplete="off">
+      <div class="bk-search-results" id="bk-search-results"></div>
       <a href="#identity">Identity &amp; Style</a>
       <a href="#sources">Content Sources</a>
       <a href="#publishing">Publishing</a>
-      <a href="#ai-behavior">AI Behavior</a>
-      <a href="#prompts">Prompts</a>
       {% if is_owner %}<a href="#team">Team</a>{% endif %}
       <a href="#niche">Niche</a>
+      <div class="bk-nav-divider"></div>
+      <a href="#advanced">Advanced</a>
+      {% if is_owner %}<a href="#danger" class="bk-nav-danger">Danger zone</a>{% endif %}
     </nav>
 
     <div class="bk-content">
@@ -168,7 +194,11 @@
               <span class="badge {{ 'badge-success' if kit.github_token_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.github_token_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="github_token" placeholder="{{ '••••••••  - leave blank to keep it' if kit.github_token_encrypted else 'Leave blank to use the shared token from .env' }}">
-            <p class="faint">Get one at <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> - needs "repo" scope to see private repositories. Public-only works without a token, at GitHub's much lower unauthenticated rate limit.</p>
+            <ol class="guide-steps">
+              <li>Open <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a></li>
+              <li>Generate a new token with the <strong>repo</strong> scope (needed to see private repositories - skip this for public-only, at GitHub's much lower unauthenticated rate limit)</li>
+              <li>Paste it above</li>
+            </ol>
 
             <label>Repos to draft from</label>
             {% if github_repos_available %}
@@ -246,7 +276,12 @@
               <span class="badge {{ 'badge-success' if kit.botsab_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.botsab_api_key_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="botsab_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.botsab_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
-            <p class="faint">This brand's own WhatsApp connection, if it's different from the app's default (.env). Leave both blank to keep using the shared one. Botsab is self-hosted - see <a href="https://github.com/halleshubham/Botsab" target="_blank" rel="noopener">github.com/halleshubham/Botsab</a> to run your own instance; the instance ID and API key come from that deployment.</p>
+            <p class="faint" style="margin-bottom:.3rem">This brand's own WhatsApp connection, if it's different from the app's default (.env). Leave both blank to keep using the shared one.</p>
+            <ol class="guide-steps">
+              <li>Botsab is self-hosted - see <a href="https://github.com/halleshubham/Botsab" target="_blank" rel="noopener">github.com/halleshubham/Botsab</a> to run your own instance</li>
+              <li>Grab the instance ID and API key from that deployment</li>
+              <li>Paste them above</li>
+            </ol>
             <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save WhatsApp settings</button>
           </form>
         </div>
@@ -260,7 +295,11 @@
               <span class="badge {{ 'badge-success' if kit.postiz_api_key_encrypted else 'badge-neutral' }}">{{ "Key set" if kit.postiz_api_key_encrypted else "Not set - using .env fallback" }}</span>
             </label>
             <input type="password" name="postiz_api_key" placeholder="{{ '••••••••  - leave blank to keep it' if kit.postiz_api_key_encrypted else 'Leave blank to use the shared key from .env' }}">
-            <p class="faint">Postiz is self-hosted - see <a href="https://postiz.com" target="_blank" rel="noopener">postiz.com</a> to run your own instance, then generate an API key from its settings.</p>
+            <ol class="guide-steps">
+              <li>Postiz is self-hosted - see <a href="https://postiz.com" target="_blank" rel="noopener">postiz.com</a> to run your own instance</li>
+              <li>Generate an API key from its settings</li>
+              <li>Paste it above</li>
+            </ol>
 
             <label>Channels to post to</label>
             {% if postiz_channels_available %}
@@ -279,11 +318,14 @@
         </div>
       </section>
 
-      <section id="ai-behavior" class="bk-group">
+      <section id="advanced" class="bk-group">
         <div class="bk-group-heading">
-          <h2>AI Behavior</h2>
-          <p>How the pipeline drafts and which models fund each step.</p>
+          <h2>Advanced</h2>
+          <p>Model overrides and raw system prompts. Most brands never need to touch these.</p>
         </div>
+
+        <div class="bk-subgroup-label">AI behavior</div>
+        <p class="bk-subgroup-hint">How the pipeline drafts and which models fund each step.</p>
 
         <div class="panel">
           <h3>Drafting</h3>
@@ -326,13 +368,9 @@
             <button type="submit" class="btn btn-sm" style="margin-top:.6rem">Save models</button>
           </form>
         </div>
-      </section>
 
-      <section id="prompts" class="bk-group">
-        <div class="bk-group-heading">
-          <h2>Prompts</h2>
-          <p>The full system prompt for each stage, for this brand only. Edit freely - "Reset to default" is the only safety net for a bad edit, so keep a copy of anything you're heavily rewriting.</p>
-        </div>
+        <div class="bk-subgroup-label">Prompts</div>
+        <p class="bk-subgroup-hint">The full system prompt for each stage, for this brand only. Edit freely - "Reset to default" is the only safety net for a bad edit, so keep a copy of anything you're heavily rewriting.</p>
 
         <div class="panel">
           {% for group_name, slots in prompt_groups.items() %}
@@ -472,27 +510,87 @@
   </div>
 
   <script>
-    // Quick-scroll sidebar: highlight whichever group is currently in view.
-    // Plain IntersectionObserver, no framework - same pattern as board.html's
-    // own inline scripts.
+    // Real vertical tabs: exactly one .bk-group visible at a time, driven by
+    // the URL hash so #prompts-style deep links from elsewhere in the app
+    // keep working. No-JS fallback is graceful: nothing here ever applies
+    // `hidden` unless this script actually runs, so a JS-less load just
+    // shows every section (the old scroll-everything behavior).
     (function () {
-      var links = Array.prototype.slice.call(document.querySelectorAll('#bk-nav a'));
+      var links = Array.prototype.slice.call(document.querySelectorAll('#bk-nav a[href^="#"]'));
       var groups = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
 
-      function setActive(id) {
+      function showTab(id) {
+        var matched = false;
+        groups.forEach(function (el) {
+          if (!el) return;
+          var isMatch = el.id === id;
+          el.hidden = !isMatch;
+          if (isMatch) matched = true;
+        });
+        if (!matched && groups[0]) { groups[0].hidden = false; id = groups[0].id; }
         links.forEach(function (a) {
           a.classList.toggle('active', a.getAttribute('href') === '#' + id);
         });
       }
 
-      var observer = new IntersectionObserver(
-        function (entries) {
-          var visible = entries.filter(function (e) { return e.isIntersecting; });
-          if (visible.length) setActive(visible[0].target.id);
-        },
-        { rootMargin: '-10% 0px -70% 0px' }
-      );
-      groups.forEach(function (el) { if (el) observer.observe(el); });
+      function currentId() {
+        return (location.hash || '').replace(/^#/, '') || (groups[0] && groups[0].id);
+      }
+
+      showTab(currentId());
+      window.addEventListener('hashchange', function () { showTab(currentId()); });
+    })();
+
+    // Settings search: indexes every <label> across all tabs (visible or
+    // not - the point is finding a setting you don't know which tab it's
+    // under) and jumps to + briefly highlights the matching field on pick.
+    (function () {
+      var input = document.getElementById('bk-search');
+      var results = document.getElementById('bk-search-results');
+      if (!input || !results) return;
+
+      var index = Array.prototype.slice.call(document.querySelectorAll('.bk-content label')).map(function (label) {
+        var group = label.closest('.bk-group');
+        var heading = group ? group.querySelector('.bk-group-heading h2') : null;
+        return {
+          text: (label.textContent || '').trim(),
+          sectionName: heading ? heading.textContent.trim() : '',
+          groupId: group ? group.id : '',
+          el: label,
+        };
+      }).filter(function (item) { return item.text; });
+
+      function clear() { results.innerHTML = ''; }
+
+      function render(matches) {
+        clear();
+        matches.slice(0, 12).forEach(function (item) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.innerHTML = '<span class="bk-result-section">' + item.sectionName + '</span><br>' + item.text;
+          btn.addEventListener('click', function () {
+            if (item.groupId) location.hash = item.groupId;
+            clear();
+            input.value = '';
+            requestAnimationFrame(function () {
+              item.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              item.el.classList.add('bk-highlight');
+              setTimeout(function () { item.el.classList.remove('bk-highlight'); }, 1600);
+            });
+          });
+          results.appendChild(btn);
+        });
+      }
+
+      input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        if (!q) { clear(); return; }
+        render(index.filter(function (item) { return item.text.toLowerCase().indexOf(q) !== -1; }));
+      });
+
+      document.addEventListener('click', function (e) {
+        if (e.target !== input && !results.contains(e.target)) clear();
+      });
     })();
   </script>
 {% endblock %}

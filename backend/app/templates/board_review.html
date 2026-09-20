@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}{{ item.article_title or "Reel review" }} - Socialize{% endblock %}
+{% block content %}
+  <style>
+    .rv-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .3rem; }
+    .rv-header h1 { margin: 0; font-size: 1.3rem; }
+    .rv-meta { color: var(--text-muted); font-size: .85rem; margin-bottom: 1.4rem; }
+    .rv-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.5rem; align-items: start; }
+    @media (max-width: 900px) { .rv-layout { display: block; } }
+    .rv-layout > .panel { margin-bottom: 1rem; }
+
+    .rv-shotlist-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    .rv-shotlist-table td, .rv-shotlist-table th { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .rv-shotlist-table th { color: var(--text-muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; }
+    .rv-shotlist-table td.rv-timeframe { white-space: nowrap; color: var(--text-muted); }
+
+    .rv-sidebar .panel { margin-bottom: 1rem; }
+    .rv-sidebar .actions { display: flex; flex-direction: column; gap: .5rem; }
+    .rv-sidebar .actions .btn { width: 100%; justify-content: center; }
+
+    .modal-body { margin-bottom: .8rem; white-space: pre-wrap; font-size: .9rem; }
+    .hashtags { color: var(--primary); font-size: .85rem; margin-bottom: .6rem; }
+    .text-review-form { border: 1px solid var(--warning); border-radius: var(--radius-sm); padding: .7rem .8rem; margin: .5rem 0; background: color-mix(in srgb, var(--warning) 8%, transparent); }
+    .shotlist-table-wrap { overflow-x: auto; margin: .5rem 0; }
+  </style>
+
+  <div class="rv-header">
+    <h1>{{ item.article_title or "(untitled)" }}</h1>
+    <a href="/board" class="btn btn-ghost btn-sm">&larr; Back to board</a>
+  </div>
+  <div class="rv-meta">
+    {% if email %}From {{ email.sender }} &middot; email subject: {{ email.subject }}<br>{% endif %}
+    {% if item.priority_score is not none %}Priority {{ "%.2f" | format(item.priority_score) }}{% endif %}
+    {% if item.article_url %} &middot; <a href="{{ item.article_url }}" target="_blank" rel="noopener">open article &#8599;</a>{% endif %}
+    &middot; Content Review &middot; Reel
+  </div>
+
+  {% set text_review = item.language in ("hi", "mr") %}
+
+  <div class="rv-layout">
+    <div class="rv-main">
+      {% if item.copy_text %}
+        <div class="panel">
+          <h3>Caption</h3>
+          <div class="modal-body">{{ item.copy_text }}</div>
+          {% if item.hashtags %}<div class="hashtags">{{ item.hashtags | join(' ') }}</div>{% endif %}
+        </div>
+      {% endif %}
+
+      {% if item.reel_script %}
+        <div class="panel">
+          <h3>Script</h3>
+          <form method="post" action="/board/{{ item.id }}/edit-reel-script" class="text-review-form">
+            <input type="hidden" name="return_to" value="review">
+            <p class="faint">Editing the script clears the shot list below - Regenerate builds a fresh one from the edited script.</p>
+            <label>Reel script</label>
+            <textarea name="reel_script" rows="5">{{ item.reel_script }}</textarea>
+            <label>Character/subject description (repeated in every scene for visual consistency)</label>
+            <textarea name="character_description" rows="2">{{ item.character_description or '' }}</textarea>
+            <button type="submit" class="btn" style="margin-top:.4rem">Save script</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {% if item.reel_scenes %}
+        <div class="panel">
+          <h3>Shot list</h3>
+          <div class="shotlist-table-wrap">
+            <table class="rv-shotlist-table">
+              <thead>
+                <tr><th>#</th><th>Timeframe</th><th>Visual</th><th>Text on visual</th><th>Music</th><th>Voiceover</th></tr>
+              </thead>
+              <tbody>
+                {% for scene in item.reel_scenes %}
+                  <tr>
+                    <td>{{ loop.index }}{% if scene.location == "host" %} (host){% endif %}</td>
+                    <td class="rv-timeframe">{{ scene.timeframe or '' }}</td>
+                    <td>{{ scene.description or '' }}</td>
+                    <td>{{ scene.text_on_visual or "None" }}</td>
+                    <td>{{ scene.music or "None" }}</td>
+                    <td>{{ scene.narration or '' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if text_review and item.reel_scenes %}
+        <div class="panel">
+          <h3>Narration &amp; music</h3>
+          <form method="post" action="/board/{{ item.id }}/edit-reel-scenes" class="text-review-form">
+            <input type="hidden" name="return_to" value="review">
+            <p class="faint">Marathi/Hindi narration is AI-drafted and can need fixing - edit the exact spoken text and music direction per scene before Approve.</p>
+            {% for scene in item.reel_scenes %}
+              <label>Scene {{ loop.index }}{% if scene.location == "host" %} (host){% endif %} narration</label>
+              <textarea name="narration_{{ loop.index0 }}" rows="2">{{ scene.narration or '' }}</textarea>
+              <label>Scene {{ loop.index }} music</label>
+              <input type="text" name="music_{{ loop.index0 }}" value="{{ scene.music or '' }}">
+            {% endfor %}
+            <button type="submit" class="btn" style="margin-top:.4rem">Save narration &amp; music</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="rv-sidebar">
+      <div class="panel">
+        <h3>Reel style</h3>
+        <form method="post" action="/board/{{ item.id }}/reel-template">
+          <input type="hidden" name="return_to" value="review">
+          <select name="reel_template" onchange="this.form.requestSubmit()">
+            {% for value, label in reel_template_choices.items() %}
+              <option value="{{ value }}" {% if value == item.reel_template %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h3>Decide</h3>
+        <form method="post" action="/board/{{ item.id }}/decide">
+          <label>Feedback (used if you ask for a regenerate)</label>
+          <textarea name="feedback" rows="2" placeholder="What to change"></textarea>
+          <div class="actions">
+            <button type="submit" name="decision" value="approve" class="btn btn-primary">Approve &amp; generate reel</button>
+            <button type="submit" name="decision" value="regenerate" class="btn">Regenerate</button>
+            <button type="submit" name="decision" value="discard" class="btn btn-danger">Discard</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h3>More</h3>
+        <div class="actions">
+          <textarea id="copy-payload-{{ item.id }}" hidden>REEL: {{ item.article_title }}
+Language: {{ item.language }}
+Reel style: {{ item.reel_template or '' }}
+Character/Subject (always English - it's a visual/production description, not published text): {{ item.character_description or '' }}
+
+Script:
+{{ item.reel_script or '' }}
+{% if item.reel_scenes %}
+Shot list:
+{% for scene in item.reel_scenes %}
+Scene {{ loop.index }} ({{ scene.timeframe or '' }}){% if scene.location == "host" %} [host]{% endif %}
+Visual: {{ scene.description or '' }}
+Narration ({{ item.language }}): {{ scene.narration or '(silent - no narration this scene)' }}
+Music: {{ scene.music or 'none' }}
+{% endfor %}
+{% endif %}
+Caption / post description:
+{{ item.copy_text or '' }}
+{% if item.hashtags %}
+Hashtags: {{ item.hashtags | join(' ') }}
+{% endif %}</textarea>
+          <button type="button" class="btn" onclick="copyCardContent('{{ item.id }}', this)">&#128203; Copy full content (for pasting into Google Flow etc.)</button>
+          {% if item.copy_text %}
+            <form method="post" action="/board/{{ item.id }}/send-whatsapp" onsubmit="return confirm('Send this post to your configured WhatsApp recipient now - as a text-only message, no media exists yet?')">
+              <button type="submit" class="btn">Send via WhatsApp (text only)</button>
+            </form>
+          {% endif %}
+          <form method="post" action="/board/{{ item.id }}/rewind-to-needs-review">
+            <button type="submit" class="btn">Back to Needs Review</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function copyCardContent(itemId, btn) {
+      var el = document.getElementById('copy-payload-' + itemId);
+      if (!el) return;
+      var original = btn.textContent;
+      navigator.clipboard.writeText(el.value).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = original; }, 1500);
+      }).catch(function () {
+        alert('Could not copy automatically - your browser may be blocking clipboard access. Select the text manually instead.');
+      });
+    }
+  </script>
+{% endblock %}
