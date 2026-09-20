@@ -5,30 +5,100 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Log in - Socialize</title>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/design-system.css">
   <style>
-    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-    .login-card { width: 100%; max-width: 340px; padding: 0 1.25rem; }
-    .login-brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1.5rem; }
-    .login-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    html, body { height: 100%; }
+    body { margin: 0; }
+    .authsplit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100vh; }
+
+    .authsplit-form { display: flex; align-items: center; justify-content: center; padding: 2rem 1.5rem; }
+    .authsplit-form-inner { width: 100%; max-width: 360px; }
+
+    .authsplit-brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.1rem; margin-bottom: 2.2rem; }
+    .authsplit-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    .authsplit-form-inner h1 { font-size: 1.5rem; margin: 0 0 .3rem; }
+    .authsplit-form-inner .subtitle { color: var(--text-muted); margin: 0 0 1.8rem; font-size: .92rem; }
+
     .error-banner { background: var(--danger-tint); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .85rem; margin-bottom: 1rem; }
-    .login-footer { text-align: center; margin-top: 1rem; font-size: .85rem; color: var(--text-muted); }
+    .authsplit-proceed { width: 100%; justify-content: center; padding: .75rem 1rem; font-size: .95rem; border-radius: var(--radius); margin-top: .3rem; }
+    .authsplit-footer { text-align: center; margin-top: 1.4rem; font-size: .85rem; color: var(--text-muted); }
+
+    .authsplit-brandpane {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 3rem 3rem 2.5rem;
+      background: linear-gradient(155deg, var(--primary) 0%, var(--primary-hover) 100%);
+      color: var(--primary-fg);
+      overflow: hidden;
+    }
+    .authsplit-brandpane::before, .authsplit-brandpane::after {
+      content: ""; position: absolute; border-radius: 50%; border: 1.5px solid rgba(255,255,255,.14);
+    }
+    .authsplit-brandpane::before { width: 620px; height: 620px; right: -220px; top: -260px; }
+    .authsplit-brandpane::after { width: 420px; height: 420px; right: -140px; bottom: -180px; }
+
+    .authsplit-brandpane-top { display: flex; align-items: center; gap: .55rem; font-weight: 700; font-size: 1.15rem; position: relative; z-index: 1; }
+    .authsplit-brandpane-top .dot { width: .7rem; height: .7rem; border-radius: 50%; background: var(--primary-fg); }
+    .authsplit-brandpane-mid { position: relative; z-index: 1; max-width: 420px; }
+    .authsplit-brandpane-mid h2 { font-size: 1.7rem; line-height: 1.3; margin: 0 0 .9rem; text-wrap: balance; }
+    .authsplit-brandpane-mid p { font-size: .95rem; opacity: .88; line-height: 1.55; margin: 0; }
+
+    .authsplit-features { display: flex; gap: 1.5rem; flex-wrap: wrap; position: relative; z-index: 1; margin-top: 2rem; }
+    .authsplit-feature { }
+    .authsplit-feature .label { font-weight: 700; font-size: .95rem; }
+    .authsplit-feature .hint { opacity: .78; font-size: .78rem; margin-top: .15rem; }
+
+    @media (max-width: 860px) {
+      .authsplit { display: block; }
+      .authsplit-brandpane { display: none; }
+      .authsplit-form { min-height: 100vh; }
+    }
   </style>
 </head>
 <body>
-  <div class="login-card panel">
-    <div class="login-brand"><span class="dot"></span> Socialize</div>
-    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
-    <form method="post" action="/login">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Email</label>
-      <input type="email" name="email" required autofocus>
-      <label>Password</label>
-      <input type="password" name="password" required>
-      <button type="submit" class="btn btn-primary btn-block" style="margin-top:1.1rem">Log in</button>
-    </form>
-    <div class="login-footer">New here? <a href="/signup">Create an account</a></div>
+  <div class="authsplit">
+    <div class="authsplit-form">
+      <div class="authsplit-form-inner">
+        <div class="authsplit-brand"><span class="dot"></span> Socialize</div>
+        <h1>Welcome back</h1>
+        <p class="subtitle">Log in to continue.</p>
+
+        {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+        {% if unverified_email %}
+          <form method="post" action="/verify-email/resend" style="margin-bottom:1rem">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="email" value="{{ unverified_email }}">
+            <button type="submit" class="btn btn-block">Resend verification email</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/login">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Email</label>
+          <input type="email" name="email" value="{{ unverified_email or '' }}" placeholder="hello@company.com" required autofocus>
+          <label>Password</label>
+          <input type="password" name="password" required>
+          <button type="submit" class="btn btn-primary authsplit-proceed">Log in &rarr;</button>
+        </form>
+        <div class="authsplit-footer">New here? <a href="/signup">Create an account</a></div>
+      </div>
+    </div>
+
+    <div class="authsplit-brandpane">
+      <div class="authsplit-brandpane-top"><span class="dot"></span> Socialize</div>
+      <div class="authsplit-brandpane-mid">
+        <h2>Newsletters and repos in, on-brand posts out.</h2>
+        <p>Socialize drafts posters, reels, and carousels from your Gmail newsletters, GitHub activity, RSS feeds, and product catalog - reviewed by you, then sent to WhatsApp and every channel connected through Postiz.</p>
+        <div class="authsplit-features">
+          <div class="authsplit-feature"><div class="label">Poster &middot; Reel &middot; Carousel</div><div class="hint">Three formats, one pipeline</div></div>
+          <div class="authsplit-feature"><div class="label">Bring your own key</div><div class="hint">You own the AI spend</div></div>
+          <div class="authsplit-feature"><div class="label">Gmail &middot; GitHub &middot; RSS &middot; Store</div><div class="hint">Four content sources</div></div>
+        </div>
+      </div>
+      <div></div>
+    </div>
   </div>
 </body>
 </html>

@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+psycopg://socialize:socialize@localhost:5432/socialize"
 
+    # Redis - shared state across app replicas. Nothing reads this yet
+    # (login-attempt throttling and rate limiting are still in-process
+    # dicts, correct only for today's single-replica deployment - see
+    # auth/login_throttle.py and middleware/rate_limit.py); added ahead of
+    # that migration so the infrastructure exists to build against.
+    # docker-compose overrides this to redis:6379 automatically - this
+    # value is for running the app locally (outside docker) against the
+    # compose redis, whose port is mapped to 6381 on the host to avoid
+    # colliding with a local Redis install (same reasoning as
+    # DATABASE_URL's 5434 for Postgres).
+    redis_url: str = "redis://localhost:6381/0"
+
     # LLM providers (read by litellm from env directly too; kept here for
     # explicit config/validation and for the provider-check script)
     anthropic_api_key: str = ""
@@ -83,6 +95,19 @@ class Settings(BaseSettings):
     botsab_base_url: str = "https://botsab.shackyapps.in"
     botsab_api_key: str = ""
     botsab_instance_id: str = ""
+
+    # Resend (email) - the only email-sending capability in this app,
+    # currently just self-serve signup's verification link
+    # (auth/email_verification.py). resend_from_email must be an address on
+    # a domain verified in the Resend dashboard, or every send fails -
+    # Resend's own onboarding domain (onboarding@resend.dev) works for
+    # testing without a custom domain, but only ever delivers to the
+    # account's own verified email. Unset means "email verification isn't
+    # configured" - signup then falls back to auto-verifying accounts
+    # rather than locking new users out with no way to receive the link
+    # (see auth/email_verification.py's send_verification_email).
+    resend_api_key: str = ""
+    resend_from_email: str = ""
 
 
 @lru_cache

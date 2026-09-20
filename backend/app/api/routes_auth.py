@@ -3,10 +3,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from backend.app.auth.basic import BasicAuthBackend, hash_password
+from backend.app.auth.basic import BasicAuthBackend, hash_password, verify_password
+from backend.app.auth.email_verification import can_resend, is_configured, send_verification_email, verify_token
 from backend.app.auth.login_throttle import is_locked_out, record_failure, record_success
 from backend.app.db.models import User
 from backend.app.db.session import get_db
+from backend.app.integrations.resend.client import ResendError
 from backend.app.util.csrf import generate_csrf_token, verify_csrf_token
 
 router = APIRouter()
@@ -54,6 +56,29 @@ def login(
     user = backend_auth.authenticate(db, email, password)
     if not user:
         record_failure(email)
+        # A correct password against an unverified account gets a distinct,
+        # actionable message (not a security leak - this person already
+        # knows the account exists, they just created it) rather than the
+        # generic "invalid email or password", which would otherwise read
+        # as a wrong-password error with no indication of what to actually
+        # do next.
+        unverified = (
+            db.query(User)
+            .filter(User.email == email.strip().lower(), User.email_verified.is_(False))
+            .first()
+        )
+        if unverified and unverified.hashed_password and verify_password(password, unverified.hashed_password):
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {
+                    "error": "Please verify your email first - check your inbox for the link, "
+                    "or use the resend option on the verification page.",
+                    "csrf_token": generate_csrf_token(request),
+                    "unverified_email": unverified.email,
+                },
+                status_code=401,
+            )
         return templates.TemplateResponse(
             request,
             "login.html",
@@ -191,6 +216,7 @@ def signup(
             status_code=400,
         )
 
+    resend_configured = is_configured()
     user = User(
         email=email,
         hashed_password=hash_password(password),
@@ -202,10 +228,78 @@ def signup(
         # self-serve signup can never mint an admin or superadmin account.
         is_admin=False,
         is_superadmin=False,
+        # Auto-verified when Resend isn't configured - see
+        # email_verification.py's module docstring for why this fails
+        # open rather than stranding new accounts with no way to verify.
+        email_verified=not resend_configured,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
 
+    if resend_configured:
+        verify_url_base = str(request.url_for("verify_email"))
+        try:
+            send_verification_email(db, user, verify_url_base)
+        except ResendError:
+            # The account still exists and can resend from the "check your
+            # email" page - a Resend outage shouldn't be a 500 on signup.
+            pass
+        return RedirectResponse(url=f"/verify-email/pending?email={email}", status_code=303)
+
+    request.session["user_id"] = str(user.id)
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.get("/verify-email/pending", response_class=HTMLResponse)
+def verify_email_pending(request: Request, email: str = "", sent: str = ""):
+    """Landed on right after signup when Resend is configured - the token
+    itself was already generated and emailed by send_verification_email in
+    the signup route above; this is just "check your inbox," with a resend
+    option once the cooldown in email_verification.py's can_resend allows it."""
+    return templates.TemplateResponse(
+        request,
+        "verify_email_pending.html",
+        {"email": email, "just_resent": bool(sent), "csrf_token": generate_csrf_token(request)},
+    )
+
+
+@router.post("/verify-email/resend")
+def verify_email_resend(
+    request: Request,
+    email: str = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    email = email.strip().lower()
+    if not verify_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/verify-email/pending?email={email}", status_code=303)
+    user = db.query(User).filter(User.email == email, User.email_verified.is_(False)).first()
+    # Same redirect either way - doesn't confirm/deny whether an unverified
+    # account exists for this email; the "sent" banner shows regardless,
+    # and the cooldown/Resend-outage cases fail silently on purpose (same
+    # reasoning as the signup route above).
+    if user and can_resend(user):
+        try:
+            verify_url_base = str(request.url_for("verify_email"))
+            send_verification_email(db, user, verify_url_base)
+        except ResendError:
+            pass
+    return RedirectResponse(url=f"/verify-email/pending?email={email}&sent=1", status_code=303)
+
+
+@router.get("/verify-email", response_class=HTMLResponse, name="verify_email")
+def verify_email(request: Request, token: str = "", db: Session = Depends(get_db)):
+    user = verify_token(db, token)
+    if not user:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "error": "That verification link is invalid or already used - log in, or request a new one.",
+                "csrf_token": generate_csrf_token(request),
+            },
+            status_code=400,
+        )
     request.session["user_id"] = str(user.id)
     return RedirectResponse(url="/board", status_code=303)

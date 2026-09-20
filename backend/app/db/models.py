@@ -40,6 +40,17 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     contact_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Self-serve signups (routes_auth.py's /signup) start unverified and
+    # can't log in until they click the emailed link (auth/
+    # email_verification.py) - BasicAuthBackend.authenticate checks this,
+    # same pattern as is_active. Admin-created accounts (routes_admin.py)
+    # are created already verified - an admin vouching for the account
+    # out-of-band stands in for the email round-trip. Existing rows from
+    # before this column existed are grandfathered verified (migration
+    # server_default), not silently locked out.
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    email_verification_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

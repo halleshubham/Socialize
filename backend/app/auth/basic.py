@@ -49,4 +49,6 @@ class BasicAuthBackend:
             return None
         if not user.is_active:
             return None
+        if not user.email_verified:
+            return None
         return user

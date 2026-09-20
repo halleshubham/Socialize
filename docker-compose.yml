@@ -16,6 +16,25 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    # --save/--appendonly: everything currently planned to live here
+    # (login-attempt throttling, later a Celery/RQ job queue) is either
+    # TTL-expiring or safely rebuildable, not data that must survive a
+    # restart - persistence is enabled anyway so a restart doesn't
+    # instantly reset every rate limit/lockout window at once.
+    command: redis-server --save 60 100 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build: .
     restart: unless-stopped
@@ -23,8 +42,11 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://socialize:socialize@db:5432/socialize
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -39,3 +61,4 @@ services:
 volumes:
   db_data:
   media_data:
+  redis_data:

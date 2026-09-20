@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check your email - Socialize</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/design-system.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .pending-card { width: 100%; max-width: 380px; padding: 0 1.25rem; text-align: center; }
+    .pending-brand { display: flex; align-items: center; justify-content: center; gap: .5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1.5rem; }
+    .pending-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    .sent-banner { background: var(--primary-tint); color: var(--primary); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .85rem; margin-bottom: 1rem; }
+    .pending-footer { text-align: center; margin-top: 1rem; font-size: .85rem; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="pending-card panel">
+    <div class="pending-brand"><span class="dot"></span> Socialize</div>
+    {% if just_resent %}<div class="sent-banner">Verification email sent - check your inbox.</div>{% endif %}
+    <h3 style="margin-top:0">Verify your email</h3>
+    <p class="muted">We sent a verification link to <strong>{{ email }}</strong>. Click it to finish setting up your account.</p>
+    <form method="post" action="/verify-email/resend" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="email" value="{{ email }}">
+      <button type="submit" class="btn btn-block">Resend email</button>
+    </form>
+    <div class="pending-footer">Already verified? <a href="/login">Log in</a></div>
+  </div>
+</body>
+</html>

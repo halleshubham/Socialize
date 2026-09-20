@@ -4,6 +4,7 @@
   <h1>Users</h1>
   <p class="muted">Registration is open - anyone can create their own account at <code>/signup</code>. Use this page to manage accounts afterward, or create one directly yourself.</p>
   {% if error %}<div class="badge badge-danger" style="margin-bottom:1rem">{{ error }}</div>{% endif %}
+  <p class="faint" style="margin-top:-.5rem">Email verification: <strong>{{ verified_count }}</strong> verified, <strong>{{ pending_count }}</strong> pending.</p>
 
   <div class="panel">
     <h3>Add user</h3>
@@ -40,6 +41,9 @@
         {% if u.is_superadmin %}<span class="badge badge-primary">superadmin</span>
         {% elif u.is_admin %}<span class="badge badge-primary">admin</span>{% endif %}
         <span class="badge {{ 'badge-success' if u.is_active else 'badge-danger' }}">{{ "active" if u.is_active else "deactivated" }}</span>
+        <span class="badge {{ 'badge-success' if u.email_verified else 'badge-warning' }}" title="{% if not u.email_verified and u.email_verification_sent_at %}Last verification email sent {{ u.email_verification_sent_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}">
+          {{ "email verified" if u.email_verified else "email pending" }}
+        </span>
         <span class="faint">joined <time class="local-time" datetime="{{ u.created_at.isoformat() }}">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></span>
       </div>
       {% if u.full_name or u.contact_number or u.company_name %}

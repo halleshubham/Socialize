@@ -35,10 +35,18 @@ def list_users(
     error: str | None = None,
 ):
     users = db.query(User).order_by(User.created_at.asc()).all()
+    verified_count = sum(1 for u in users if u.email_verified)
     return templates.TemplateResponse(
         request,
         "admin_users.html",
-        {"users": users, "user": admin, "error": error, "active_nav": "admin"},
+        {
+            "users": users,
+            "user": admin,
+            "error": error,
+            "active_nav": "admin",
+            "verified_count": verified_count,
+            "pending_count": len(users) - verified_count,
+        },
     )
 
 
