@@ -640,8 +640,24 @@
     // UTC (17:55 IST got scheduled for 17:55 UTC = 23:25 IST). Convert to a
     // real UTC ISO timestamp here, where the actual offset is known, before
     // the form submits. Blank stays blank (send now).
+    //
+    // Found live: a user picked a date AND time in this field, confirmed
+    // "for <date>", but the post still went out immediately - schedule_at
+    // reached the server as an empty string. Root cause: a datetime-local
+    // input reports .value === "" whenever ANY sub-field (date or time) is
+    // incomplete, even if the picker visually looks filled in - a
+    // long-standing browser quirk, not something this form's logic can see
+    // from .value alone. input.validity.badInput is the one signal the
+    // platform gives specifically for "some of it was typed, but not a
+    // complete value" - checked before falling through to the "blank means
+    // send now" path, so an incomplete pick is now a loud rejection instead
+    // of a silent immediate send.
     function submitPostiz(form) {
       var input = form.querySelector('input[name="schedule_at"]');
+      if (input && input.validity && input.validity.badInput) {
+        alert('That date/time looks incomplete - make sure both the date and the time are filled in, then try again. (Leave the field fully empty instead if you meant to send right now.)');
+        return false;
+      }
       var when = 'now';
       if (input && input.value) {
         var parsed = new Date(input.value);
