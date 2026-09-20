@@ -273,6 +273,7 @@ def show_board(
             "image_model_key": get_image_model_key(db, brand.id),
             "image_model_labels": IMAGE_MODEL_LABELS,
             "auto_mode": get_auto_mode_settings(db, brand.id),
+            "auto_schedule_running": _schedule_job_already_running(db, brand.id),
             "language_choices": LANGUAGE_CHOICES,
             "default_language": brand.default_language or DEFAULT_LANGUAGE,
             "template_choices": TEMPLATE_CHOICES,

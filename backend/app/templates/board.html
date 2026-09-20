@@ -168,6 +168,7 @@
     <button type="button" class="btn btn-primary btn-sm" onclick="location.reload()">Refresh</button>
     <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('update-banner').hidden = true">Dismiss</button>
   </div>
+  <span id="auto-schedule-state" data-running="{{ 'true' if auto_schedule_running else 'false' }}" hidden></span>
 
   <div class="board-toolbar">
     <form method="post" action="/board/fetch">
@@ -492,7 +493,13 @@
           </form>
         {% endif %}
         {% if key == "approved" %}
-          <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('auto-schedule-modal').showModal()">Auto-schedule&hellip;</button>
+          {% if auto_schedule_running %}
+            <button type="button" class="btn btn-sm" style="width:100%; margin-bottom:.6rem" disabled title="Paces ~1 post every few minutes so it can take a while - watch the Scheduled column for progress.">
+              <span class="spinner spinner-sm" aria-hidden="true"></span> Auto-scheduling&hellip;
+            </button>
+          {% else %}
+            <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('auto-schedule-modal').showModal()">Auto-schedule&hellip;</button>
+          {% endif %}
         {% endif %}
         {% for item in items_by_stage[key] %}
           {{ cm.card_face(item, key, emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id)) }}
@@ -505,7 +512,13 @@
     <div class="column collapsible" data-col="scheduled">
       <h3 class="column-toggle" onclick="window.toggleBoardColumn(this)">Scheduled <span class="count">{{ scheduled_items | length }}</span></h3>
       {% if scheduled_items %}
-        <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('reschedule-all-modal').showModal()">Reschedule all&hellip;</button>
+        {% if auto_schedule_running %}
+          <button type="button" class="btn btn-sm" style="width:100%; margin-bottom:.6rem" disabled title="Auto-schedule and Reschedule-all share one per-brand job slot, so only one can run at a time - watch the Scheduled column for progress.">
+            <span class="spinner spinner-sm" aria-hidden="true"></span> Scheduling job running&hellip;
+          </button>
+        {% else %}
+          <button type="button" class="btn btn-sm btn-primary" style="width:100%; margin-bottom:.6rem" onclick="document.getElementById('reschedule-all-modal').showModal()">Reschedule all&hellip;</button>
+        {% endif %}
       {% endif %}
       {% for item in scheduled_items %}
         {{ cm.card_face(item, "scheduled", emails_by_id.get(item.source_email_id), media_by_item_id.get(item.id), cost_by_item_id.get(item.id), scheduled_posts_by_item_id.get(item.id)) }}
@@ -756,22 +769,30 @@
       });
     });
 
-    // Background actions (content generation, WhatsApp sends, ...) update
-    // the card once they finish server-side, but there's no push channel to
-    // this page. Poll quietly while anything's processing and surface a
-    // dismissible "Updated" banner instead of reloading outright - an
-    // earlier version force-reloaded the whole page every few seconds,
-    // which yanked you back to the top mid-scroll/mid-read. Refreshing is
-    // now always something you click, never something that just happens.
+    // Background actions (content generation, WhatsApp sends, auto-
+    // schedule, ...) update the card/button once they finish server-side,
+    // but there's no push channel to this page. Poll quietly while
+    // anything's processing (or the shared auto-schedule/reschedule-all
+    // job is running - see auto-schedule-state below, which reflects
+    // routes_board.py's per-brand SyncState lock) and surface a dismissible
+    // "Updated" banner instead of reloading outright - an earlier version
+    // force-reloaded the whole page every few seconds, which yanked you
+    // back to the top mid-scroll/mid-read. Refreshing is now always
+    // something you click, never something that just happens - the
+    // "Auto-scheduling..." button itself only reverts once you do.
     (function () {
+      var stateEl = document.getElementById('auto-schedule-state');
+      var scheduleRunning = !!stateEl && stateEl.dataset.running === 'true';
       var watched = document.querySelectorAll('.kcard[data-status="processing"]');
-      if (!watched.length) return;
+      if (!watched.length && !scheduleRunning) return;
 
       function signature(root) {
-        return Array.prototype.map.call(
+        var cards = Array.prototype.map.call(
           root.querySelectorAll('.kcard[data-item-id]'),
           function (el) { return el.dataset.itemId + ':' + el.dataset.status; }
         ).sort().join('|');
+        var stateNode = root.getElementById ? root.getElementById('auto-schedule-state') : null;
+        return cards + '|schedule:' + (stateNode ? stateNode.dataset.running : '');
       }
 
       var initial = signature(document);
