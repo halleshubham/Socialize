@@ -1,10 +1,10 @@
 """Lightweight synchronizer-token CSRF protection for unauthenticated
-state-changing endpoints - currently just /login (routes_auth.py), the
-only unauthenticated POST route in the app today. Not a general CSRF
+state-changing endpoints - /login and /signup (routes_auth.py), the only
+unauthenticated POST routes in the app today. Not a general CSRF
 middleware for every authenticated route in the app (those are a separate,
-broader concern) - scoped to this one endpoint per the SaaS-readiness
-Phase 0 item that asked for it specifically. A session-based synchronizer
-token works fine pre-login: Starlette's SessionMiddleware doesn't require
+broader concern) - scoped to these per the SaaS-readiness Phase 0 item
+that asked for it specifically. A session-based synchronizer token works
+fine pre-login: Starlette's SessionMiddleware doesn't require
 authentication to have a session, it's just a signed cookie either way.
 """
 

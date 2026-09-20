@@ -139,6 +139,28 @@ def signup(
             },
             status_code=400,
         )
+    # Matches the users table's actual column lengths (models.py) - without
+    # this, an overlong value doesn't fail cleanly here, it reaches the
+    # INSERT and raises a raw DB error (StringDataRightTruncation) instead
+    # of a normal validation message.
+    _field_limits = [
+        ("email", email, 320),
+        ("full name", full_name, 255),
+        ("contact number", contact_number, 30),
+        ("company name", company_name, 255),
+    ]
+    for label, value, limit in _field_limits:
+        if len(value) > limit:
+            return templates.TemplateResponse(
+                request,
+                "signup.html",
+                {
+                    "error": f"{label.capitalize()} is too long (max {limit} characters).",
+                    "csrf_token": generate_csrf_token(request),
+                    "values": values,
+                },
+                status_code=400,
+            )
     if password != confirm_password:
         return templates.TemplateResponse(
             request,
