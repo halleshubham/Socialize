@@ -1,3 +1,4 @@
+import logging
 import re
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -15,6 +16,7 @@ from backend.app.util.csrf import generate_csrf_token, verify_csrf_token
 
 router = APIRouter()
 templates = Jinja2Templates(directory="backend/app/templates")
+logger = logging.getLogger(__name__)
 backend_auth = BasicAuthBackend()
 
 _MIN_PASSWORD_LENGTH = 8
@@ -264,7 +266,11 @@ def signup(
         except ResendError:
             # The account still exists and can resend from the "check your
             # email" page - a Resend outage shouldn't be a 500 on signup.
-            pass
+            # Logged, not silent - found live that a signup can fail to
+            # send with zero trace anywhere (Resend rejecting the `to`
+            # address outright, e.g. example.com domains) and the only way
+            # to have known was re-querying Resend's own API directly.
+            logger.exception("Verification email send failed for %s", user.email)
         return RedirectResponse(url=f"/verify-email/pending?email={email}", status_code=303)
 
     request.session["user_id"] = str(user.id)
@@ -304,7 +310,7 @@ def verify_email_resend(
             verify_url_base = str(request.url_for("verify_email"))
             send_verification_email(db, user, verify_url_base)
         except ResendError:
-            pass
+            logger.exception("Verification email resend failed for %s", user.email)
     return RedirectResponse(url=f"/verify-email/pending?email={email}&sent=1", status_code=303)
 
 
