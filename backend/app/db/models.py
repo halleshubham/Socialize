@@ -20,15 +20,26 @@ class User(Base):
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     auth_provider: Mapped[str] = mapped_column(String(50), default="basic")
     # Global-admin flag (distinct from being a per-brand owner) - gates the
-    # /admin/users "create a user" flow. Only the bootstrapped admin account
-    # has this set, unless another admin promotes someone.
+    # /admin/users "create a user" flow. Granting/revoking this on another
+    # user is itself superadmin-only (see is_superadmin below) - a plain
+    # admin can manage users but can't mint new admins.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The one account bootstrapped from ADMIN_EMAIL/ADMIN_PASSWORD
+    # (main.py's bootstrap_admin_user) - the sole authority for granting or
+    # revoking is_admin on any other user. Not self-serve, not grantable
+    # through the app itself; there is exactly one of these by design.
+    is_superadmin: Mapped[bool] = mapped_column(Boolean, default=False)
     # Admin-facing abuse-response lever, short of full deletion (deletion
     # refuses while a user still owns any brand - see auth/account_deletion.py -
     # deactivation doesn't have that restriction, since it's reversible and
     # doesn't touch any data). BasicAuthBackend.authenticate checks this
     # before issuing a session; a deactivated user simply can't log in.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Collected at self-serve signup (routes_auth.py's /signup) - optional
+    # when an admin creates an account by hand instead (routes_admin.py).
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

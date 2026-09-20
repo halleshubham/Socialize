@@ -1,8 +1,13 @@
-"""Admin-only user account management. There's no self-serve signup and no
-email-sending infra in this app - an admin creates an account (email +
-password, shared with that person out-of-band) and then a brand owner
-shares a brand with them (see routes_brands.py). New users start with zero
-brand memberships.
+"""Admin user account management. Registration is public self-serve now
+(routes_auth.py's /signup, open to anyone, always creates a plain
+non-admin account) - this page is for admin-side management afterward:
+deactivation, deletion, and granting/revoking admin status. An admin can
+also still create an account directly here (e.g. onboarding someone by
+hand), same as before self-serve signup existed.
+
+Granting or revoking is_admin on another user is superadmin-only (see
+auth/brand_deps.py's get_current_superadmin_user) - every other action on
+this page stays available to any admin.
 """
 
 import uuid
@@ -14,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth.account_deletion import delete_user
 from backend.app.auth.basic import hash_password
-from backend.app.auth.brand_deps import get_current_admin_user
+from backend.app.auth.brand_deps import get_current_admin_user, get_current_superadmin_user
 from backend.app.db.models import User
 from backend.app.db.session import get_db
 
@@ -41,15 +46,60 @@ def list_users(
 def create_user(
     email: str = Form(...),
     password: str = Form(...),
+    full_name: str = Form(""),
+    contact_number: str = Form(""),
+    company_name: str = Form(""),
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
+    """Unlike /signup, the profile fields here are optional - an admin
+    creating an account by hand may not have all of it, and is_admin/
+    is_superadmin still aren't settable from this form either way (always
+    False here, same as self-serve - see toggle_admin below for the only
+    way to grant admin)."""
     email = email.strip().lower()
     if not email or not password:
         return RedirectResponse(url="/admin/users?error=Email and password are required", status_code=303)
     if db.query(User).filter(User.email == email).first():
         return RedirectResponse(url="/admin/users?error=A user with that email already exists", status_code=303)
-    db.add(User(email=email, hashed_password=hash_password(password), auth_provider="basic"))
+    db.add(
+        User(
+            email=email,
+            hashed_password=hash_password(password),
+            auth_provider="basic",
+            full_name=full_name.strip() or None,
+            contact_number=contact_number.strip() or None,
+            company_name=company_name.strip() or None,
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/admin/users", status_code=303)
+
+
+@router.post("/users/{user_id}/toggle-admin")
+def toggle_admin(
+    user_id: str,
+    db: Session = Depends(get_db),
+    superadmin: User = Depends(get_current_superadmin_user),
+):
+    """The only way any user ever becomes (or stops being) an admin -
+    superadmin-only, per this route's own dependency. Refuses on the
+    superadmin's own account (there's exactly one superadmin, and it must
+    stay an admin) and on any other superadmin (none exist today since
+    is_superadmin is never grantable through the app, but the check costs
+    nothing and keeps the invariant explicit)."""
+    try:
+        target_id = uuid.UUID(user_id)
+    except ValueError:
+        return RedirectResponse(url="/admin/users", status_code=303)
+    if target_id == superadmin.id:
+        return RedirectResponse(url="/admin/users?error=Can't change your own admin status", status_code=303)
+    target = db.get(User, target_id)
+    if not target:
+        return RedirectResponse(url="/admin/users", status_code=303)
+    if target.is_superadmin:
+        return RedirectResponse(url="/admin/users?error=Can't change a superadmin's admin status", status_code=303)
+    target.is_admin = not target.is_admin
     db.commit()
     return RedirectResponse(url="/admin/users", status_code=303)
 

@@ -30,14 +30,27 @@ settings = get_settings()
 
 
 def bootstrap_admin_user() -> None:
-    """Creates the single admin user from ADMIN_EMAIL/ADMIN_PASSWORD if no
-    user with that email exists yet. Idempotent, safe to run on every boot."""
+    """Creates the one superadmin user from ADMIN_EMAIL/ADMIN_PASSWORD if no
+    user with that email exists yet - the sole account that can grant or
+    revoke is_admin on anyone else (see auth/brand_deps.py's
+    get_current_superadmin_user). Idempotent, safe to run on every boot.
+
+    Also self-heals an existing deployment: if ADMIN_EMAIL already matched a
+    user from before is_superadmin existed (this app previously bootstrapped
+    a plain admin here), that row is promoted to superadmin on the next
+    boot rather than leaving the deployment with zero superadmins after the
+    upgrade - env config is the only lever for this account, never a
+    self-serve or in-app action."""
     if not settings.admin_email or not settings.admin_password:
         return
     db = SessionLocal()
     try:
         existing = db.query(User).filter(User.email == settings.admin_email).first()
         if existing:
+            if not existing.is_superadmin:
+                existing.is_superadmin = True
+                existing.is_admin = True
+                db.commit()
             return
         db.add(
             User(
@@ -45,6 +58,7 @@ def bootstrap_admin_user() -> None:
                 hashed_password=hash_password(settings.admin_password),
                 auth_provider="basic",
                 is_admin=True,
+                is_superadmin=True,
             )
         )
         db.commit()

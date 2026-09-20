@@ -66,6 +66,18 @@ def get_current_admin_user(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def get_current_superadmin_user(user: User = Depends(get_current_user)) -> User:
+    """Gates granting/revoking is_admin on another user (routes_admin.py's
+    toggle_admin) - a strictly narrower check than get_current_admin_user
+    above. Every other /admin/* action stays available to any admin; only
+    minting or demoting admins is superadmin-only, so a compromised or
+    malicious admin account can't grant itself (or an accomplice) more
+    admins."""
+    if not user.is_superadmin:
+        raise HTTPException(status_code=403, detail="Superadmin only")
+    return user
+
+
 def get_owned_brand(brand_kit_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> BrandKit:
     """For routes_brands.py's member-management routes, which name a brand
     in the URL path rather than acting on the session's active brand - an

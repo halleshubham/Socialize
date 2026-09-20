@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign up - Socialize</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/design-system.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem 0; }
+    .signup-card { width: 100%; max-width: 380px; padding: 0 1.25rem; }
+    .signup-brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1.5rem; }
+    .signup-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    .error-banner { background: var(--danger-tint); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .85rem; margin-bottom: 1rem; }
+    .signup-footer { text-align: center; margin-top: 1rem; font-size: .85rem; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="signup-card panel">
+    <div class="signup-brand"><span class="dot"></span> Socialize</div>
+    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+    <form method="post" action="/signup">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label>Full name</label>
+      <input type="text" name="full_name" value="{{ values.full_name or '' }}" required autofocus>
+
+      <label>Email</label>
+      <input type="email" name="email" value="{{ values.email or '' }}" required>
+
+      <label>Contact number (with country code)</label>
+      <input type="tel" name="contact_number" value="{{ values.contact_number or '' }}" placeholder="+91 98765 43210" required>
+
+      <label>Company name</label>
+      <input type="text" name="company_name" value="{{ values.company_name or '' }}" required>
+
+      <label>Password</label>
+      <input type="password" name="password" required minlength="8">
+
+      <label>Confirm password</label>
+      <input type="password" name="confirm_password" required minlength="8">
+
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:1.1rem">Create account</button>
+    </form>
+    <div class="signup-footer">Already have an account? <a href="/login">Log in</a></div>
+  </div>
+</body>
+</html>

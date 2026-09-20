@@ -2,7 +2,7 @@
 {% block title %}Admin - Socialize{% endblock %}
 {% block content %}
   <h1>Users</h1>
-  <p class="muted">Create accounts for people you want to share brands with — there's no self-serve signup, so an admin makes the account and shares the login (email + password) out of band.</p>
+  <p class="muted">Registration is open - anyone can create their own account at <code>/signup</code>. Use this page to manage accounts afterward, or create one directly yourself.</p>
   {% if error %}<div class="badge badge-danger" style="margin-bottom:1rem">{{ error }}</div>{% endif %}
 
   <div class="panel">
@@ -16,6 +16,18 @@
         <label>Password</label>
         <input type="text" name="password" required style="margin:0" placeholder="Share this with them directly">
       </div>
+      <div>
+        <label>Full name (optional)</label>
+        <input type="text" name="full_name" style="margin:0">
+      </div>
+      <div>
+        <label>Contact number (optional)</label>
+        <input type="tel" name="contact_number" style="margin:0">
+      </div>
+      <div>
+        <label>Company (optional)</label>
+        <input type="text" name="company_name" style="margin:0">
+      </div>
       <button type="submit" class="btn btn-primary">Create user</button>
     </form>
   </div>
@@ -25,18 +37,31 @@
     <div class="card">
       <div style="display:flex; align-items:center; gap:.6rem; flex-wrap:wrap">
         <span>{{ u.email }}</span>
-        {% if u.is_admin %}<span class="badge badge-primary">admin</span>{% endif %}
+        {% if u.is_superadmin %}<span class="badge badge-primary">superadmin</span>
+        {% elif u.is_admin %}<span class="badge badge-primary">admin</span>{% endif %}
         <span class="badge {{ 'badge-success' if u.is_active else 'badge-danger' }}">{{ "active" if u.is_active else "deactivated" }}</span>
         <span class="faint">joined <time class="local-time" datetime="{{ u.created_at.isoformat() }}">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></span>
-        {% if u.id != user.id %}
+      </div>
+      {% if u.full_name or u.contact_number or u.company_name %}
+        <div class="faint" style="margin-top:.3rem">
+          {{ u.full_name or '' }}{% if u.company_name %} &middot; {{ u.company_name }}{% endif %}{% if u.contact_number %} &middot; {{ u.contact_number }}{% endif %}
+        </div>
+      {% endif %}
+      {% if u.id != user.id %}
+        <div style="display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin-top:.5rem">
+          {% if user.is_superadmin and not u.is_superadmin %}
+            <form method="post" action="/admin/users/{{ u.id }}/toggle-admin" style="margin:0">
+              <button type="submit" class="btn btn-ghost btn-sm">{{ "Revoke admin" if u.is_admin else "Grant admin" }}</button>
+            </form>
+          {% endif %}
           <form method="post" action="/admin/users/{{ u.id }}/toggle-active" style="margin:0">
             <button type="submit" class="btn btn-ghost btn-sm">{{ "Deactivate" if u.is_active else "Reactivate" }}</button>
           </form>
           <form method="post" action="/admin/users/{{ u.id }}/delete" style="margin:0" onsubmit="return confirm('Permanently delete {{ u.email }}? This cannot be undone.')">
             <button type="submit" class="btn btn-danger btn-sm">Delete</button>
           </form>
-        {% endif %}
-      </div>
+        </div>
+      {% endif %}
     </div>
   {% endfor %}
 {% endblock %}
