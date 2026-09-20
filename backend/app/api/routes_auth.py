@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -16,6 +18,12 @@ templates = Jinja2Templates(directory="backend/app/templates")
 backend_auth = BasicAuthBackend()
 
 _MIN_PASSWORD_LENGTH = 8
+# Mirrors signup.html's contact_number `pattern` attribute - the client-
+# side check alone doesn't stop a direct POST, and email/password already
+# get equivalent server-side enforcement (duplicate check, min length), so
+# contact_number had a real gap: it's the one field whose label asks for a
+# specific format ("with country code") but had nothing enforcing it.
+_CONTACT_NUMBER_RE = re.compile(r"^\+[0-9][0-9 \-]{6,18}$")
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -159,6 +167,18 @@ def signup(
             "signup.html",
             {
                 "error": "Name, email, contact number, company name, and password are all required.",
+                "csrf_token": generate_csrf_token(request),
+                "values": values,
+            },
+            status_code=400,
+        )
+    if not _CONTACT_NUMBER_RE.match(contact_number):
+        return templates.TemplateResponse(
+            request,
+            "signup.html",
+            {
+                "error": "Contact number must include the country code, starting with + "
+                "(e.g. +91 98765 43210).",
                 "csrf_token": generate_csrf_token(request),
                 "values": values,
             },

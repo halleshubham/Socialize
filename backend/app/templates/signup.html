@@ -11,14 +11,14 @@
     body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem 0; }
     .signup-card { width: 100%; max-width: 380px; padding: 0 1.25rem; }
     .signup-brand { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1.5rem; }
-    .signup-brand .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--primary); }
+    .signup-brand .brand-logo { height: 1.6rem; width: auto; display: block; }
     .error-banner { background: var(--danger-tint); color: var(--danger); border-radius: var(--radius-sm); padding: .6rem .75rem; font-size: .85rem; margin-bottom: 1rem; }
     .signup-footer { text-align: center; margin-top: 1rem; font-size: .85rem; color: var(--text-muted); }
   </style>
 </head>
 <body>
   <div class="signup-card panel">
-    <div class="signup-brand"><span class="dot"></span> Socialize</div>
+    <div class="signup-brand"><img src="/static/img/logo.png" alt="" class="brand-logo"> Socialize</div>
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
     <form method="post" action="/signup">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -30,7 +30,7 @@
       <input type="email" name="email" value="{{ values.email or '' }}" required>
 
       <label>Contact number (with country code)</label>
-      <input type="tel" name="contact_number" value="{{ values.contact_number or '' }}" placeholder="+91 98765 43210" required>
+      <input type="tel" name="contact_number" value="{{ values.contact_number or '' }}" placeholder="+91 98765 43210" pattern="\+[0-9][0-9 \-]{6,18}" title="Include the country code, starting with + (e.g. +91 98765 43210)" required>
 
       <label>Company name</label>
       <input type="text" name="company_name" value="{{ values.company_name or '' }}" required>
