@@ -16,7 +16,12 @@ from backend.app.auth.brand_deps import get_active_brand
 from backend.app.auth.deps import get_current_user
 from backend.app.db.models import BrandKit, User
 from backend.app.db.session import get_db
-from backend.app.integrations.gmail.oauth import build_authorization_flow, disconnect, save_credentials
+from backend.app.integrations.gmail.oauth import (
+    GmailClientNotConfigured,
+    build_authorization_flow,
+    disconnect,
+    save_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +44,8 @@ def connect(
 ):
     try:
         flow = build_authorization_flow(_callback_redirect_uri(request))
-    except FileNotFoundError:
-        return RedirectResponse(
-            url="/brand-kit?error=Gmail OAuth client not configured (GMAIL_CREDENTIALS_PATH) - see docs/architecture.md",
-            status_code=303,
-        )
+    except GmailClientNotConfigured as exc:
+        return RedirectResponse(url=f"/brand-kit?error={exc}", status_code=303)
     auth_url, state = flow.authorization_url(prompt="consent", include_granted_scopes="true")
 
     # PKCE's code_verifier lives only on this Flow instance - a fresh Flow()

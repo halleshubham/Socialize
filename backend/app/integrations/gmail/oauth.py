@@ -26,6 +26,39 @@ GMAIL_READONLY_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 PROVIDER = "gmail"
 
 
+class GmailClientNotConfigured(Exception):
+    """Raised when neither GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET nor a client
+    JSON file at GMAIL_CREDENTIALS_PATH is available - the app itself has
+    no OAuth client to start any brand's consent flow with."""
+
+
+def gmail_client_config() -> dict:
+    """The shared OAuth client, in google_auth_oauthlib's client-config
+    shape. GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET win when both are set -
+    treated as a "Web application" client, which is what any real domain
+    needs - so a deploy platform only has to hold two env vars instead of
+    mounting a file. Otherwise falls back to the JSON file (either "web" or
+    "installed" type, as downloaded from Google Cloud Console)."""
+    settings = get_settings()
+    if settings.gmail_client_id and settings.gmail_client_secret:
+        return {
+            "web": {
+                "client_id": settings.gmail_client_id,
+                "client_secret": settings.gmail_client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+    try:
+        with open(settings.gmail_credentials_path) as f:
+            return json.load(f)
+    except FileNotFoundError as exc:
+        raise GmailClientNotConfigured(
+            "Gmail OAuth client not configured - set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET "
+            "(or GMAIL_CREDENTIALS_PATH) - see docs/architecture.md"
+        ) from exc
+
+
 class GmailNotConnected(Exception):
     """Raised when no oauth_credentials row exists yet for 'gmail' scoped to
     this brand - connect it from that brand's Brand Kit page."""
@@ -53,17 +86,16 @@ def build_authorization_flow(redirect_uri: str, state: str | None = None, code_v
     (state/code_verifier restored from the session so the SAME PKCE
     exchange started in connect() can be completed here - a new Flow()
     object is constructed per request, so nothing else carries the
-    code_verifier across the redirect round-trip). Reads the same OAuth
-    client secrets file as the local gmail_authorize.py script
-    (GMAIL_CREDENTIALS_PATH) - works whether that's a "web" or "installed"
+    code_verifier across the redirect round-trip). Uses the shared OAuth
+    client from gmail_client_config() (GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET,
+    else the GMAIL_CREDENTIALS_PATH file) - works whether that's a "web" or "installed"
     (Desktop app) type client (google_auth_oauthlib auto-detects which),
     though an "installed" client only accepts a localhost redirect_uri per
     Google's own rules - fine for local dev, but a real deployment needs a
     "Web application" type OAuth client with this app's actual domain
     registered as an authorized redirect URI."""
-    settings = get_settings()
-    return Flow.from_client_secrets_file(
-        settings.gmail_credentials_path,
+    return Flow.from_client_config(
+        gmail_client_config(),
         scopes=GMAIL_READONLY_SCOPES,
         redirect_uri=redirect_uri,
         state=state,
