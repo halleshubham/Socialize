@@ -25,12 +25,20 @@ class ShopifyClient:
         self.base_url = base_url.rstrip("/")
 
     def list_products(self, limit: int = 50) -> list[dict]:
-        response = httpx.get(
-            f"{self.base_url}/products.json",
-            params={"limit": limit},
-            timeout=_TIMEOUT_SECONDS,
-            follow_redirects=True,
-        )
+        try:
+            response = httpx.get(
+                f"{self.base_url}/products.json",
+                params={"limit": limit},
+                timeout=_TIMEOUT_SECONDS,
+                follow_redirects=True,
+            )
+        except httpx.HTTPError as exc:
+            # DNS failure, connection refused, timeout, etc. - not an HTTP
+            # error response, so it won't hit the status-code check below,
+            # but callers only catch ShopifyError (see source.py's
+            # list_shopify_products) and need this store-unreachable case
+            # folded into that same "best-effort: []" contract too.
+            raise ShopifyError(f"Shopify products.json unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise ShopifyError(f"Shopify products.json error {response.status_code}: {response.text}")
         try:
