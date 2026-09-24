@@ -71,7 +71,13 @@ class Settings(BaseSettings):
     r2_bucket: str = ""
     r2_presigned_url_expiry_seconds: int = 3600
 
-    # Gmail (Phase 1)
+    # Gmail (Phase 1) - ONE shared OAuth client for the whole app (only the
+    # resulting per-brand token differs, see oauth_credentials). Set
+    # gmail_client_id + gmail_client_secret (a "Web application" client) for
+    # env-only deploys like Coolify; otherwise the client JSON file at
+    # gmail_credentials_path is used (local dev's "Desktop app" client).
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
     gmail_credentials_path: str = "./secrets/gmail_credentials.json"
 
     # GitHub - a second content source (integrations/github/), alongside

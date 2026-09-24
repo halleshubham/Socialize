@@ -22,4 +22,9 @@ EXPOSE 8000
 # override still takes precedence locally (compose overrides a Dockerfile's
 # CMD the same way either way), so local dev is unaffected - this is what
 # makes the image self-sufficient for any other deploy target too.
-CMD ["sh", "-c", "alembic -c backend/app/db/migrations/alembic.ini upgrade head && uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"]
+#
+# --proxy-headers/--forwarded-allow-ips: behind a TLS-terminating proxy
+# (Coolify's Traefik) uvicorn otherwise ignores X-Forwarded-Proto from the
+# proxy's non-loopback IP, so request.url_for() builds http:// URLs - and
+# Google rejects the Gmail OAuth callback as a redirect_uri_mismatch.
+CMD ["sh", "-c", "alembic -c backend/app/db/migrations/alembic.ini upgrade head && uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"]

@@ -5,7 +5,10 @@ browser to Google's consent screen, and stores the resulting refresh token
 
 Prerequisites:
   - GMAIL_CREDENTIALS_PATH in .env points at your downloaded OAuth "Desktop
-    app" client JSON (see docs/architecture.md for how to get one).
+    app" client JSON (see docs/architecture.md for how to get one), or
+    GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET are set - in that case the client
+    needs http://localhost registered as a redirect URI, since this script
+    uses a local loopback server.
   - The Postgres container is up: `docker compose up -d db`
   - DATABASE_URL in .env resolves to that db from the host (localhost:5434
     by default - see .env.example).
@@ -18,14 +21,16 @@ import sys
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from backend.app.config import get_settings
 from backend.app.db.models import BrandKit
 from backend.app.db.session import SessionLocal
-from backend.app.integrations.gmail.oauth import GMAIL_READONLY_SCOPES, save_credentials
+from backend.app.integrations.gmail.oauth import (
+    GMAIL_READONLY_SCOPES,
+    gmail_client_config,
+    save_credentials,
+)
 
 
 def main() -> None:
-    settings = get_settings()
     brand_name = sys.argv[1] if len(sys.argv) > 1 else None
 
     db = SessionLocal()
@@ -42,9 +47,7 @@ def main() -> None:
                 return
             brand = brands[0]
 
-        flow = InstalledAppFlow.from_client_secrets_file(
-            settings.gmail_credentials_path, GMAIL_READONLY_SCOPES
-        )
+        flow = InstalledAppFlow.from_client_config(gmail_client_config(), GMAIL_READONLY_SCOPES)
         creds = flow.run_local_server(port=0)
         save_credentials(db, brand.id, creds)
     finally:
