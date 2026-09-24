@@ -659,6 +659,73 @@ def draft_from_website(
     return RedirectResponse(url="/board?error=Drafting posts from the catalog in the background", status_code=303)
 
 
+def idea_to_angle(idea: str, extra_context: str = "") -> dict:
+    """Builds the one synthesized "angle" dict for a free-text idea - the
+    manual-input sibling of researcher/github_angles.py and
+    researcher/product_angles.py's extract_angles, except there's no LLM
+    angle-extraction call here at all: the user already IS the angle (they
+    told us directly what's worth posting about), so this skips straight
+    to the shape create_content_items expects instead of asking an LLM to
+    figure out "what's worth posting about" from some other grounding
+    text. Always suitable_for_social with max priority_score - the user
+    explicitly asked for this one, unlike a newsletter/repo/catalog batch
+    where an LLM has to first decide which of many candidates are worth
+    it. full_text folds extra_context in (there's no separate angle-
+    extraction prompt to hand it to instead) so it isn't silently dropped
+    before reaching the content writer."""
+    idea = idea.strip()
+    title = idea.splitlines()[0][:120] if idea else "Untitled idea"
+    full_text = f"{idea}\n\n{extra_context.strip()}" if extra_context.strip() else idea
+    return {
+        "title": title,
+        "url": None,
+        "summary": idea,
+        "full_text": full_text,
+        "suitable_for_social": True,
+        "priority_score": 100,
+        "rationale": "Drafted directly from a user-submitted idea",
+    }
+
+
+def _run_idea_draft(
+    brand_kit_id, idea: str, extra_context: str, format_override: str | None, language_override: str | None
+) -> None:
+    create_content_items(
+        SessionLocal,
+        brand_kit_id,
+        [idea_to_angle(idea, extra_context)],
+        source_email_id=None,
+        format_override=format_override,
+        language_override=language_override,
+    )
+
+
+@router.post("/draft-from-idea")
+def draft_from_idea(
+    idea: str = Form(...),
+    extra_context: str = Form(""),
+    format: str = Form(""),
+    language: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    brand: BrandKit = Depends(get_active_brand),
+):
+    """The free-text sibling of draft_github_posts/draft_from_website - no
+    inbox, repo or catalog needed, so unlike those two this is available to
+    every brand regardless of what's configured on Brand Kit. Backgrounds
+    the same way (the graph run through the analytical node's LLM call is
+    the slow part, same as the other two), just without their fast-fail
+    grounding-fetch step first since there's no external source to fail
+    against here."""
+    if not idea.strip():
+        return RedirectResponse(url="/board?error=Write an idea to draft from first", status_code=303)
+
+    format_override = format if format in VALID_FORMATS else None
+    language_override = language if language in LANGUAGE_CHOICES else None
+    run_in_background(_run_idea_draft, brand.id, idea, extra_context, format_override, language_override)
+    return RedirectResponse(url="/board?error=Drafting a post from your idea in the background", status_code=303)
+
+
 @router.post("/search-query")
 def update_search_query(
     query: str = Form(""),
