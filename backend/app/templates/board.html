@@ -192,6 +192,8 @@
       <button type="submit" class="btn">Save search</button>
     </form>
 
+    <button type="button" class="btn" onclick="document.getElementById('idea-draft-modal').showModal()">Draft from an idea&hellip;</button>
+
     {% if active_brand.github_repos %}
       <button type="button" class="btn" onclick="document.getElementById('github-draft-modal').showModal()">Draft from GitHub&hellip;</button>
     {% endif %}
@@ -202,6 +204,40 @@
 
     <button type="button" class="settings-gear-btn" title="Reel &amp; auto-mode settings" onclick="document.getElementById('settings-modal').showModal()">⚙️</button>
   </div>
+
+  <dialog id="idea-draft-modal" class="settings-modal">
+    <button type="button" class="modal-close" onclick="document.getElementById('idea-draft-modal').close()">✕</button>
+    <h2>Draft from an idea</h2>
+    <p class="faint" style="margin-top:-.4rem">Skip the inbox/repo/catalog - describe what you want posted about and it drafts straight from that, no angle-picking step first.</p>
+
+    <form method="post" action="/board/draft-from-idea" onsubmit="return confirm('Draft a post from this idea? This runs in the background and adds a card to Needs Review.')" style="display:block">
+      <label>Your idea</label>
+      <textarea name="idea" rows="4" required placeholder="e.g. Announce our new refund policy - always refunded within 3 business days now, clearer wording on the returns page"></textarea>
+
+      <label>Extra context (optional)</label>
+      <textarea name="extra_context" rows="2" placeholder="Anything else worth grounding the post in"></textarea>
+
+      <label>Format (optional override)</label>
+      <select name="format">
+        <option value="">Brand default{% if active_brand.combined_drafting %} ({{ active_brand.combined_drafting_format }}){% endif %}</option>
+        <option value="text_only">Text only</option>
+        <option value="poster">Poster</option>
+        <option value="reel">Reel (video)</option>
+        <option value="carousel">Carousel</option>
+      </select>
+
+      <label>Language (optional override)</label>
+      <select name="language">
+        <option value="">Brand default ({{ language_choices.get(active_brand.default_language, active_brand.default_language) }})</option>
+        {% for code, name in language_choices.items() %}
+          <option value="{{ code }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Only needed for a combined-drafting brand, where every draft otherwise uses the brand's fixed default format/language.</p>
+
+      <button type="submit" class="btn btn-primary" style="margin-top:.8rem; width:100%">Draft post</button>
+    </form>
+  </dialog>
 
   {% if active_brand.github_repos %}
     <dialog id="github-draft-modal" class="settings-modal">

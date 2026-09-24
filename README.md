@@ -31,7 +31,7 @@ Socialize watches your Gmail inbox, finds newsletter articles worth posting abou
 
 - **Open, self-serve, bring-your-own-key** — anyone can register at `/signup` (with optional real email verification via [Resend](https://resend.com/)); no shared AI bill, each brand owner connects their own LLM/image/video provider keys, so the platform never resells or meters AI spend on its own account.
 - **Multi-brand, multi-user** — each brand has its own Gmail inbox, niche, identity, logo, and publishing credentials. Brand owners can share a brand with other users; API/LLM costs always bill to the owner. A superadmin tier controls who else can become an admin.
-- **Four content sources** — Gmail newsletters, a connected GitHub repo's own activity, RSS feeds, and a WooCommerce product catalog.
+- **Four content sources, or skip sourcing entirely** — Gmail newsletters, a connected GitHub repo's own activity, RSS feeds, and a WooCommerce/Shopify product catalog. Or just type an idea directly — no inbox/repo/catalog needed, drafts straight from what you write.
 - **LLM-agnostic and per-brand configurable** — every pipeline step (research, drafting, image direction, shot-listing) can be pointed at a different model per brand, with a sane global default. Backed by [LiteLLM](https://github.com/BerriAI/litellm), so swapping providers is a config change, not a code change.
 - **Combined drafting mode** — an optional cheaper path that drafts the brief and the post copy in one LLM call instead of two, configurable per brand.
 - **Poster generation** — six content-aware templates (quote, tribute, narrative, fact/critique, trivia, event) inferred automatically per article, rendered by an AI image model with brand-strip compositing (logo, social handles, website).
@@ -51,6 +51,7 @@ A [LangGraph](https://github.com/langchain-ai/langgraph) state graph per article
 ```
 Gmail / GitHub / RSS / product catalog fetch (daily, or on demand)
   -> Researcher extracts every article/angle from the source
+  (or: type an idea directly -> skips fetch + Researcher entirely)
   -> per article: fetch full text -> Analytical brief -> [review]
        -> Content Writer (caption/hashtags/headline) -> [review]
             -> poster:    Graphic Designer -> [review] -> Approved
