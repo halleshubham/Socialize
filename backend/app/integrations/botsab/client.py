@@ -23,6 +23,11 @@ Auth is a flat `x-api-key` header (also accepted as `Authorization: Bearer
 import httpx
 
 _TIMEOUT_SECONDS = 60  # video uploads are larger than a poster PNG
+# A video send is slower than the upload: Botsab may first re-encode the
+# file to a WhatsApp-playable MP4, then uploads it to WhatsApp's servers
+# before answering - a 60s cap reported long reels as failed even though
+# they went out.
+_VIDEO_SEND_TIMEOUT_SECONDS = 300
 
 
 class BotsabError(Exception):
@@ -55,14 +60,14 @@ class BotsabClient:
 
     def send_video_bytes(self, to: str, file_bytes: bytes, filename: str, mimetype: str, caption: str = "") -> dict:
         file_id = self.upload_file(file_bytes, filename, mimetype)
-        return self._send(to, {"type": "video", "fileId": file_id, "caption": caption})
+        return self._send(to, {"type": "video", "fileId": file_id, "caption": caption}, timeout=_VIDEO_SEND_TIMEOUT_SECONDS)
 
-    def _send(self, to: str, payload: dict) -> dict:
+    def _send(self, to: str, payload: dict, timeout: float = _TIMEOUT_SECONDS) -> dict:
         response = httpx.post(
             f"{self.base_url}/instances/{self.instance_id}/messages/send",
             headers={"x-api-key": self.api_key, "Content-Type": "application/json"},
             json={"to": to, **payload},
-            timeout=_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         self._raise_for_status(response)
         return response.json()
