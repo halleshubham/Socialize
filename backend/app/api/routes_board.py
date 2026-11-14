@@ -62,7 +62,7 @@ from backend.app.integrations.product_catalog import build_grounding_text, list_
 from backend.app.llm.image_provider import IMAGE_MODEL_LABELS, get_image_model_key, set_image_model_key
 from backend.app.llm.video_provider import VIDEO_MODEL_CHOICES
 from backend.app.storage.local_disk import get_storage_backend
-from backend.app.worker.background import run_in_background
+from backend.app.worker.background import run_in_background, run_in_background_slow
 from backend.app.worker.cleanup import get_retention_days, set_retention_days
 from backend.app.worker.pipeline import fetch_pending_email_ids, process_pending_emails
 from backend.app.worker.rss_pipeline import run_rss_fetch
@@ -1094,7 +1094,7 @@ def retry_reel(
         generate_reel(db, content_item)
         content_item.stage = Stage.MEDIA_GENERATED
 
-    run_in_background(_run_with_processing_state, content_item_id, _work)
+    run_in_background_slow(_run_with_processing_state, content_item_id, _work)
     return RedirectResponse(url="/board", status_code=303)
 
 
@@ -1278,7 +1278,8 @@ def generate_media(
     db.commit()
     sync_format_to_graph_state(content_item_id, target_format)
 
-    run_in_background(_run_with_processing_state, content_item_id, _generate_media_work(target_format))
+    executor = run_in_background_slow if target_format == "reel" else run_in_background
+    executor(_run_with_processing_state, content_item_id, _generate_media_work(target_format))
     return RedirectResponse(url="/board", status_code=303)
 
 
@@ -1328,7 +1329,8 @@ def approve_and_generate_media(
     db.commit()
     sync_format_to_graph_state(content_item_id, target_format)
 
-    run_in_background(_run_with_processing_state, content_item_id, _generate_media_work(target_format))
+    executor = run_in_background_slow if target_format == "reel" else run_in_background
+    executor(_run_with_processing_state, content_item_id, _generate_media_work(target_format))
     return RedirectResponse(url="/board", status_code=303)
 
 
