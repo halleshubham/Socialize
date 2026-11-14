@@ -16,6 +16,7 @@ from backend.agents.orchestrator import process_email
 from backend.app.db.models import IngestedEmail
 from backend.app.db.session import SessionLocal
 from backend.app.integrations.gmail.fetch import fetch_new_emails
+from backend.app.worker.background import run_in_background
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,27 @@ def fetch_pending_email_ids(brand_kit_id: uuid.UUID) -> tuple[list[uuid.UUID], i
         db.close()
 
 
+def _process_one_email(email_id: uuid.UUID) -> None:
+    try:
+        process_email(SessionLocal, email_id)
+    except Exception:
+        logger.exception("Pipeline run failed for email %s", email_id)
+
+
 def process_pending_emails(email_ids: list[uuid.UUID]) -> None:
+    """Dispatches each email as its OWN background task rather than looping
+    through them on one thread - found live: one email whose auto-advance
+    reached reel generation (minutes, via the graph's own synchronous
+    content_review -> reel_editor resume chain) blocked every other email in
+    the same fetch behind it, since they all sat on one thread waiting their
+    turn in this loop. The board showed the whole batch stuck "processing"
+    for however long that one reel took, with nothing wrong reported - every
+    email really was being worked, just serialized behind the slowest one.
+    Each email claims and runs independently anyway (status 'new' ->
+    'processing' per-row), so nothing about correctness depends on doing
+    this in one thread - only throughput does, and this fixes that."""
     for email_id in email_ids:
-        try:
-            process_email(SessionLocal, email_id)
-        except Exception:
-            logger.exception("Pipeline run failed for email %s", email_id)
+        run_in_background(_process_one_email, email_id)
 
 
 def run_daily_fetch(brand_kit_id: uuid.UUID) -> int:
